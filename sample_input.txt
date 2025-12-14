@@ -1,0 +1,7 @@
+Here is my OpenAI key:
+sk-1234567890abcdefghijklmnopqrstuvwxyz
+
+GitHub token:
+ghp_abcdefghijklmnopqrstuvwxyz123456
+
+password = "supersecretpassword"

@@ -1,0 +1,67 @@
+{
+  "version": "0.1",
+  "generated_at": "2025-12-13T18:34:38.419948Z",
+  "entries": [
+    {
+      "type": "file",
+      "input": "C:\\Users\\steve\\dev\\blacktent\\patched_sample_input.txt",
+      "output": "C:\\Users\\steve\\dev\\blacktent\\blacktent.bundle\\files\\patched_sample_input.txt.redacted.txt",
+      "findings": [
+        {
+          "rule": "PASSWORD",
+          "start": 115,
+          "end": 143,
+          "replacement": "[REDACTED:PASSWORD:08f4af65]",
+          "match_len": 28,
+          "match_sha256": "08f4af65b36c0c7d3b9d1ad071d259a6f62da5038a1696801d0759b32f0fa418"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "input": "C:\\Users\\steve\\dev\\blacktent\\sample_input.txt",
+      "output": "C:\\Users\\steve\\dev\\blacktent\\blacktent.bundle\\files\\sample_input.txt.redacted.txt",
+      "findings": [
+        {
+          "rule": "OPENAI_KEY",
+          "start": 23,
+          "end": 62,
+          "replacement": "[REDACTED:OPENAI_KEY:88c422f1]",
+          "match_len": 39,
+          "match_sha256": "88c422f1b12a98b674e05d90c90ae5cf1aa81fa4d9a2628f21513097f5066080"
+        },
+        {
+          "rule": "GITHUB_TOKEN",
+          "start": 78,
+          "end": 114,
+          "replacement": "[REDACTED:GITHUB_TOKEN:ae875460]",
+          "match_len": 36,
+          "match_sha256": "ae8754608195aafb81001fbdb911f6019eb8b13fa6e5ef7229ea71b0b9a7f976"
+        },
+        {
+          "rule": "PASSWORD",
+          "start": 128,
+          "end": 147,
+          "replacement": "[REDACTED:PASSWORD:5ac152b6]",
+          "match_len": 19,
+          "match_sha256": "5ac152b6f8bdb8bb12959548d542cb237c4a730064bf88bbb8dd6e204912baad"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "input": "C:\\Users\\steve\\dev\\blacktent\\sample_input.txt.redacted.txt",
+      "output": "C:\\Users\\steve\\dev\\blacktent\\blacktent.bundle\\files\\sample_input.txt.redacted.txt.redacted.txt",
+      "findings": [
+        {
+          "rule": "PASSWORD",
+          "start": 115,
+          "end": 143,
+          "replacement": "[REDACTED:PASSWORD:08f4af65]",
+          "match_len": 28,
+          "match_sha256": "08f4af65b36c0c7d3b9d1ad071d259a6f62da5038a1696801d0759b32f0fa418"
+        }
+      ]
+    }
+  ]
+}

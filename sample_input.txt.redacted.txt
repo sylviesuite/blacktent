@@ -1,0 +1,7 @@
+Here is my OpenAI key:
+[REDACTED:OPENAI_KEY:88c422f1]
+
+GitHub token:
+[REDACTED:GITHUB_TOKEN:ae875460]
+
+password = "[REDACTED:PASSWORD:5ac152b6]"
