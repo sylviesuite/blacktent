@@ -2,14 +2,27 @@ from __future__ import annotations
 
 import argparse
 import errno
+import importlib
 import json
 import socket
+import subprocess
 import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .docker import DockerError, start_sandbox
+try:
+    _docker_module = importlib.import_module(".docker", __package__)
+    DockerError = _docker_module.DockerError
+    start_sandbox = _docker_module.start_sandbox
+except ImportError:
+    class DockerError(RuntimeError):
+        """Placeholder when Docker support is unavailable."""
+
+
+    def start_sandbox(*_args, **_kwargs) -> int:
+        raise DockerError("Docker integration is not available.")
+
 from .redaction import scan_and_bundle
 
 # Where we store session metadata (NOT code)
@@ -199,6 +212,40 @@ def cmd_shell(_args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _windows_listening_pids(port: int) -> list[str]:
+    if sys.platform != "win32":
+        return []
+
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return []
+
+    pids: set[str] = set()
+    for line in result.stdout.splitlines():
+        if "LISTENING" not in line.upper():
+            continue
+
+        parts = [part for part in line.split() if part]
+        if len(parts) < 5:
+            continue
+
+        local_address = parts[1]
+        if not local_address.endswith(f":{port}"):
+            continue
+
+        pid = parts[-1]
+        if pid.isdigit():
+            pids.add(pid)
+
+    return sorted(pids)
+
+
 def cmd_doctor(_args: argparse.Namespace) -> int:
     """
     Handle `blacktent doctor`.
@@ -211,6 +258,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     results = []
 
     for port, label in ports.items():
+        explanation = ""
         explanation = ""
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=2):
@@ -233,6 +281,13 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
                     "→ A process is listening on this port. "
                     "This may be a stale or different service."
                 )
+                pids = _windows_listening_pids(port)
+                if pids:
+                    explanation = (
+                        "→ A process is listening on this port "
+                        f"(PID(s): {', '.join(pids)}). "
+                        "Often a stale or different service."
+                    )
 
         symbol = "✓" if reachable else "✗"
         print(f"{symbol} {label} (localhost:{port})")
