@@ -306,6 +306,23 @@ def _print_windows_process_details(
     return list(listening_info.keys())
 
 
+def _stop_commands(port: int, pids: list[str]) -> list[str]:
+    commands: list[str] = []
+    if sys.platform == "win32":
+        if pids:
+            for pid in pids:
+                commands.append(f'tasklist /FI "PID eq {pid}"')
+                commands.append(f"taskkill /PID {pid}")
+        else:
+            commands.append('tasklist /FI "PID eq <PID>"')
+            commands.append("taskkill /PID <PID>")
+            commands.append("Add /F if it refuses to stop.")
+    else:
+        commands.append(f"lsof -i :{port}")
+        commands.append("kill <PID>")
+    return commands
+
+
 def cmd_doctor(_args: argparse.Namespace) -> int:
     """
     Handle `blacktent doctor`.
@@ -382,16 +399,17 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
                         pids = _print_windows_process_details(
                             int(selected["port"]), selected["info"]
                         )
-                        if pids and interactive:
-                            if _prompt_yes(
-                                "Would you like to see how to stop this process? (y/N): "
-                            ):
-                                for pid in pids:
-                                    print(
-                                        f"→ To stop it (manual): taskkill /PID {pid} /F"
-                                    )
                     else:
                         print("→ Detailed PID lookup is Windows-only on this OS.")
+                        pids = []
+
+                    if interactive and _prompt_yes(
+                        "Would you like to see how to stop this process? (y/N): "
+                    ):
+                        print("Here’s how this is usually handled, if helpful.")
+                        print("No changes will be made unless you choose to act.")
+                        for cmd in _stop_commands(int(selected["port"]), pids):
+                            print(f"→ {cmd}")
 
     print("No changes were made. This was a read-only diagnosis.")
     return 0 if all(results) else 1
