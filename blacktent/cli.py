@@ -246,6 +246,67 @@ def _windows_listening_pids(port: int) -> list[str]:
     return sorted(pids)
 
 
+def _windows_process_name(pid: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("Image Name"):
+            continue
+        parts = [part for part in stripped.split() if part]
+        if len(parts) >= 2 and parts[1] == pid:
+            return parts[0]
+
+    return None
+
+
+def _windows_listening_processes(port: int) -> dict[str, str | None]:
+    if sys.platform != "win32":
+        return {}
+
+    processes: dict[str, str | None] = {}
+    for pid in _windows_listening_pids(port):
+        processes[pid] = _windows_process_name(pid)
+
+    return processes
+
+
+def _prompt_yes(question: str) -> bool:
+    try:
+        response = input(question).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return response in {"y", "yes"}
+
+
+def _print_windows_process_details(
+    port: int, listening_info: dict[str, str | None]
+) -> None:
+    command_str = f"netstat -ano | findstr :{port}"
+    if not listening_info:
+        print(f"→ PID: (unavailable) (via `{command_str}`)")
+        return
+
+    descriptions = []
+    for pid, name in listening_info.items():
+        if name:
+            descriptions.append(f"{pid} ({name})")
+        else:
+            descriptions.append(pid)
+
+    print(f"→ Listening: PID(s) {', '.join(descriptions)} (via `{command_str}`)")
+    for pid in listening_info:
+        print(f"→ To stop it (manual): taskkill /PID {pid} /F")
+
+
 def cmd_doctor(_args: argparse.Namespace) -> int:
     """
     Handle `blacktent doctor`.
@@ -257,9 +318,13 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     }
     results = []
 
+    interactive = sys.stdin.isatty()
+    listening_ports: list[dict[str, object]] = []
+
     for port, label in ports.items():
         explanation = ""
-        explanation = ""
+        listening_info: dict[str, str | None] = {}
+        listener_detected = False
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=2):
                 reachable = True
@@ -281,19 +346,45 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
                     "→ A process is listening on this port. "
                     "This may be a stale or different service."
                 )
-                pids = _windows_listening_pids(port)
-                if pids:
-                    explanation = (
-                        "→ A process is listening on this port "
-                        f"(PID(s): {', '.join(pids)}). "
-                        "Often a stale or different service."
-                    )
+                listener_detected = True
+                listening_info = _windows_listening_processes(port)
 
         symbol = "✓" if reachable else "✗"
         print(f"{symbol} {label} (localhost:{port})")
         results.append(reachable)
         if not reachable and explanation:
             print(explanation)
+        if listener_detected:
+            listening_ports.append(
+                {
+                    "port": port,
+                    "label": label,
+                    "info": listening_info,
+                }
+            )
+
+    if interactive and listening_ports:
+        if _prompt_yes(
+            "Would you like more information about one of these processes? (y/N): "
+        ):
+            for idx, entry in enumerate(listening_ports, start=1):
+                print(
+                    f"[{idx}] {entry['label']} (localhost:{entry['port']})"
+                )
+            try:
+                choice = input("Choose a port number (or Enter to skip): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                choice = ""
+            if choice.isdigit():
+                idx = int(choice) - 1
+                if 0 <= idx < len(listening_ports):
+                    selected = listening_ports[idx]
+                    if sys.platform == "win32":
+                        _print_windows_process_details(
+                            int(selected["port"]), selected["info"]
+                        )
+                    else:
+                        print("→ Detailed PID lookup is Windows-only on this OS.")
 
     print("No changes were made. This was a read-only diagnosis.")
     return 0 if all(results) else 1
