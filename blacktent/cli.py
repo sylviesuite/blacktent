@@ -289,11 +289,11 @@ def _prompt_yes(question: str) -> bool:
 
 def _print_windows_process_details(
     port: int, listening_info: dict[str, str | None]
-) -> None:
+) -> list[str]:
     command_str = f"netstat -ano | findstr :{port}"
     if not listening_info:
         print(f"→ PID: (unavailable) (via `{command_str}`)")
-        return
+        return []
 
     descriptions = []
     for pid, name in listening_info.items():
@@ -303,8 +303,7 @@ def _print_windows_process_details(
             descriptions.append(pid)
 
     print(f"→ Listening: PID(s) {', '.join(descriptions)} (via `{command_str}`)")
-    for pid in listening_info:
-        print(f"→ To stop it (manual): taskkill /PID {pid} /F")
+    return list(listening_info.keys())
 
 
 def cmd_doctor(_args: argparse.Namespace) -> int:
@@ -380,9 +379,17 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
                 if 0 <= idx < len(listening_ports):
                     selected = listening_ports[idx]
                     if sys.platform == "win32":
-                        _print_windows_process_details(
+                        pids = _print_windows_process_details(
                             int(selected["port"]), selected["info"]
                         )
+                        if pids and interactive:
+                            if _prompt_yes(
+                                "Would you like to see how to stop this process? (y/N): "
+                            ):
+                                for pid in pids:
+                                    print(
+                                        f"→ To stop it (manual): taskkill /PID {pid} /F"
+                                    )
                     else:
                         print("→ Detailed PID lookup is Windows-only on this OS.")
 
