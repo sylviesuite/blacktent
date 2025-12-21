@@ -136,4 +136,22 @@ dist
 
 # Vite logs files
 vite.config.js.timestamp-*
-vite.config.ts.timestamp-*
+vite.config.ts.timestamp-*# BlackTent local runtime & artifacts
+.blacktent/
+blacktent.bundle/
+blacktent/__pycache__/
+__pycache__/
+*.redacted
+*.redact
+session.json
+tatus
+
+# BlackTent local runtime & artifacts
+.blacktent/
+blacktent.bundle/
+blacktent/__pycache__/
+__pycache__/
+*.redacted
+*.redact
+session.json
+tatus
