@@ -23,6 +23,12 @@ except ImportError:
     def start_sandbox(*_args, **_kwargs) -> int:
         raise DockerError("Docker integration is not available.")
 
+from .env_sanity import (
+    format_report,
+    load_required_keys,
+    parse_env_file,
+    validate_env,
+)
 from .redaction import scan_and_bundle
 
 # Where we store session metadata (NOT code)
@@ -415,6 +421,32 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     return 0 if all(results) else 1
 
 
+def cmd_doctor_env(args: argparse.Namespace) -> int:
+    env_path = Path(args.env)
+    require_file = Path(args.require_file) if args.require_file else None
+
+    try:
+        required_keys = load_required_keys(args.require, require_file)
+    except FileNotFoundError as exc:
+        print(f"[blacktent] ❌ {exc}", file=sys.stderr)
+        return 2
+
+    env_data, parse_issues = parse_env_file(env_path)
+    parse_missing = any(
+        issue.key == "(file)" and issue.issue == "missing" for issue in parse_issues
+    )
+    if parse_missing:
+        print(format_report(env_path, parse_issues, []))
+        return 2
+
+    validation_issues = validate_env(env_data, required_keys)
+    report = format_report(env_path, parse_issues, validation_issues)
+    print(report)
+
+    ok = not parse_issues and not validation_issues
+    return 0 if ok else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="blacktent",
@@ -461,6 +493,29 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor", help="Check local services without making changes."
     )
     p_doctor.set_defaults(func=cmd_doctor)
+
+    doctor_subparsers = p_doctor.add_subparsers(dest="doctor_subcommand")
+    doctor_subparsers.required = False
+
+    p_doctor_env = doctor_subparsers.add_parser(
+        "env", help="Run Mode 3 Environment Sanity checks."
+    )
+    p_doctor_env.add_argument(
+        "--env",
+        default=".env",
+        help="Path to the .env file to validate.",
+    )
+    p_doctor_env.add_argument(
+        "--require",
+        default="",
+        help="Comma-separated list of required env keys.",
+    )
+    p_doctor_env.add_argument(
+        "--require-file",
+        default="",
+        help="Path to a file listing required env keys, one per line.",
+    )
+    p_doctor_env.set_defaults(func=cmd_doctor_env)
 
     return parser
 
