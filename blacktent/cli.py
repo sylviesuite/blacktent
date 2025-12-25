@@ -421,6 +421,25 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     return 0 if all(results) else 1
 
 
+def _write_env_receipt(
+    env_path: Path, schema_file: str, status: str
+) -> None:
+    ensure_runtime_dir()
+    now = datetime.utcnow()
+    receipt = {
+        "timestamp": now.isoformat() + "Z",
+        "mode": "env-doctor",
+        "env_file": str(env_path),
+        "schema_file": schema_file,
+        "status": status,
+        "actions": [],
+    }
+    name = f"receipt-{now.strftime('%Y%m%dT%H%M%SZ')}.json"
+    receipt_path = RUNTIME_DIR / name
+    with receipt_path.open("w", encoding="utf-8") as f:
+        json.dump(receipt, f, indent=2)
+
+
 def cmd_doctor_env(args: argparse.Namespace) -> int:
     env_path = Path(args.env)
     require_file = Path(args.require_file) if args.require_file else None
@@ -437,6 +456,8 @@ def cmd_doctor_env(args: argparse.Namespace) -> int:
     )
     if parse_missing:
         print(format_report(env_path, parse_issues, []))
+        schema_file_value = str(require_file) if require_file else ""
+        _write_env_receipt(env_path, schema_file_value, "invalid")
         return 2
 
     validation_issues = validate_env(env_data, required_keys)
@@ -444,6 +465,9 @@ def cmd_doctor_env(args: argparse.Namespace) -> int:
     print(report)
 
     ok = not parse_issues and not validation_issues
+    schema_file_value = str(require_file) if require_file else ""
+    status_value = "ok" if ok else "invalid"
+    _write_env_receipt(env_path, schema_file_value, status_value)
     return 0 if ok else 2
 
 
