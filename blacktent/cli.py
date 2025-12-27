@@ -1,27 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import errno
-import importlib
 import json
-import socket
-import subprocess
 import sys
-import uuid
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-
-try:
-    _docker_module = importlib.import_module(".docker", __package__)
-    DockerError = _docker_module.DockerError
-    start_sandbox = _docker_module.start_sandbox
-except ImportError:
-    class DockerError(RuntimeError):
-        """Placeholder when Docker support is unavailable."""
-
-
-    def start_sandbox(*_args, **_kwargs) -> int:
-        raise DockerError("Docker integration is not available.")
+from typing import Any, Optional
 
 from .env_sanity import (
     format_report,
@@ -29,534 +14,385 @@ from .env_sanity import (
     parse_env_file,
     validate_env,
 )
-from .redaction import scan_and_bundle
 
-# Where we store session metadata (NOT code)
-RUNTIME_DIR = Path(".blacktent")
-SESSION_FILE = RUNTIME_DIR / "session.json"
-
-
-def ensure_runtime_dir() -> None:
-    """Ensure the .blacktent runtime directory exists."""
-    RUNTIME_DIR.mkdir(exist_ok=True)
+# Optional feature: redaction/bundling. Core commands (like doctor env/repo) must run without it.
+try:
+    from .redaction import scan_and_bundle  # type: ignore
+except ImportError:
+    scan_and_bundle = None  # type: ignore
 
 
-def load_session() -> dict | None:
-    """Return the current session dict if it exists, else None."""
-    if not SESSION_FILE.exists():
-        return None
-
-    try:
-        with SESSION_FILE.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        # If it's corrupted, treat as no session
-        return None
+# ----------------------------
+# Exit codes (v1 contract)
+# ----------------------------
+EXIT_OK = 0
+EXIT_INTERNAL_ERROR = 1
+EXIT_USER_FIXABLE = 2
 
 
-def save_session(session: dict) -> None:
-    """Persist the current session metadata."""
-    with SESSION_FILE.open("w", encoding="utf-8") as f:
-        json.dump(session, f, indent=2)
+# ----------------------------
+# Runtime + receipts
+# ----------------------------
+DEFAULT_RECEIPT_DIR = Path(".blacktent")
 
 
-def clear_session() -> None:
-    """Remove any existing session metadata."""
-    if SESSION_FILE.exists():
-        SESSION_FILE.unlink()
+def _utc_timestamp() -> str:
+    # Example: 2025-12-25T19:14:22Z
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
-def cmd_open(args: argparse.Namespace) -> int:
+def _receipt_filename(prefix: str = "receipt") -> str:
+    # Example: receipt-20251225T191422Z.json
+    now = datetime.now(timezone.utc)
+    return f"{prefix}-{now.strftime('%Y%m%dT%H%M%SZ')}.json"
+
+
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def write_receipt(
+    receipt_dir: Path,
+    *,
+    mode: str,
+    status: str,
+    exit_code: int,
+    inputs: dict[str, Any],
+    actions: Optional[list[dict[str, Any]]] = None,
+    notes: Optional[list[str]] = None,
+    prefix: str = "receipt",
+) -> Path:
     """
-    Handle `blacktent open <file>`.
-
-    For now this:
-      - validates the file
-      - records a session in .blacktent/session.json
-      - prints friendly status
+    Write a JSON receipt for the command invocation.
+    Never write secrets. Paths are okay; env contents are not.
     """
-    ensure_runtime_dir()
-
-    target_path = Path(args.path).expanduser().resolve()
-
-    if not target_path.exists():
-        print(f"[blacktent] ❌ File not found: {target_path}", file=sys.stderr)
-        return 1
-
-    if not target_path.is_file():
-        print(f"[blacktent] ❌ Not a file: {target_path}", file=sys.stderr)
-        return 1
-
-    existing = load_session()
-    if existing is not None:
-        print(
-            "[blacktent] ⚠ A session is already open.\n"
-            f"  session_id: {existing.get('session_id')}\n"
-            f"  file:       {existing.get('target_file')}\n"
-            "Use `blacktent close` to end it before opening another.",
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        bundle_result = scan_and_bundle(target_path)
-    except Exception as exc:
-        print(
-            f"[blacktent] ❌ Failed to build safe bundle: {exc}",
-            file=sys.stderr,
-        )
-        return 1
-
-    session_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat() + "Z"
-
-    session = {
-        "session_id": session_id,
-        "target_file": str(target_path),
-        "created_at": now,
-        "status": "open",
-        "notes": "Docker sandbox not yet attached — CLI skeleton only.",
-        "bundle_id": bundle_result["id"],
-        "bundle_root": bundle_result["bundle_root"],
-        "redacted_file": bundle_result["redacted_path"],
-        "num_redactions": bundle_result["num_redactions"],
+    ensure_dir(receipt_dir)
+    payload: dict[str, Any] = {
+        "timestamp": _utc_timestamp(),
+        "mode": mode,
+        "status": status,  # ok | invalid | error
+        "exit_code": exit_code,
+        "inputs": inputs,
+        "actions": actions or [],
+        "notes": notes or [],
     }
 
-    save_session(session)
-
-    print(
-        "[blacktent] ✅ Safe tent opened\n"
-        f"  session_id: {session_id}\n"
-        f"  file:       {target_path}\n"
-        f"  bundle_id:  {bundle_result['id']}\n"
-        f"  redacted:   {bundle_result['redacted_path']}\n"
-        f"  redactions: {bundle_result['num_redactions']}\n"
-        "You are now ready to wire this session into an ephemeral Docker sandbox."
-    )
-
-    return 0
+    out = receipt_dir / _receipt_filename(prefix=prefix)
+    with out.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    return out
 
 
-def cmd_close(_args: argparse.Namespace) -> int:
+# ----------------------------
+# Args + handlers
+# ----------------------------
+@dataclass(frozen=True)
+class DoctorEnvArgs:
+    env_file: Path
+    required_file: Path
+    receipt_dir: Path
+    quiet: bool
+
+
+def cmd_doctor_env(args: DoctorEnvArgs) -> int:
     """
-    Handle `blacktent close`.
+    Validate env file against a required-keys schema file and write a receipt.
+    Exit codes:
+      0 = ok
+      2 = invalid/missing (user-fixable)
+      1 = internal error (unexpected exception)
+    Receipt is written for every run.
     """
-    session = load_session()
-    if session is None:
-        print("[blacktent] ℹ No active session found. Nothing to close.")
-        return 0
-
-    clear_session()
-
-    print(
-        "[blacktent] 🧹 Tent closed and session cleared\n"
-        f"  previous_session_id: {session.get('session_id')}\n"
-        f"  file:                 {session.get('target_file')}"
-    )
-
-    return 0
-
-
-def cmd_status(_args: argparse.Namespace) -> int:
-    """
-    Handle `blacktent status`.
-    """
-    session = load_session()
-    if session is None:
-        print("[blacktent] 💤 No active session.")
-        return 0
-
-    print(
-        "[blacktent] 🏕 Active session\n"
-        f"  session_id: {session.get('session_id')}\n"
-        f"  file:       {session.get('target_file')}\n"
-        f"  created_at: {session.get('created_at')}\n"
-        f"  status:     {session.get('status')}"
-    )
-    return 0
-
-
-def cmd_shell(_args: argparse.Namespace) -> int:
-    """
-    Handle `blacktent shell`.
-    """
-    session = load_session()
-    if session is None:
-        print("[blacktent] ℹ No active session found. Use `blacktent open` first.")
-        return 1
-
-    bundle_root = session.get("bundle_root")
-    if not bundle_root:
-        print(
-            "[blacktent] ⚠ This session lacks bundle metadata. "
-            "Re-open the file with the latest CLI to proceed.",
-            file=sys.stderr,
-        )
-        return 1
-
-    bundle_id = session.get("bundle_id", "<unknown>")
-
-    print(
-        "[blacktent] 🧪 Launching sandbox\n"
-        f"  session_id: {session.get('session_id')}\n"
-        f"  bundle_id:  {bundle_id}\n"
-        f"  bundle_dir: {bundle_root}"
-    )
-
-    try:
-        exit_code = start_sandbox(Path(bundle_root))
-    except DockerError as exc:
-        print(f"[blacktent] ❌ {exc}", file=sys.stderr)
-        return 1
-
-    if exit_code != 0:
-        print(
-            f"[blacktent] ⚠ Sandbox exited with code {exit_code}",
-            file=sys.stderr,
-        )
-
-    return exit_code
-
-
-def _windows_listening_pids(port: int) -> list[str]:
-    if sys.platform != "win32":
-        return []
-
-    try:
-        result = subprocess.run(
-            ["netstat", "-ano"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return []
-
-    pids: set[str] = set()
-    for line in result.stdout.splitlines():
-        if "LISTENING" not in line.upper():
-            continue
-
-        parts = [part for part in line.split() if part]
-        if len(parts) < 5:
-            continue
-
-        local_address = parts[1]
-        if not local_address.endswith(f":{port}"):
-            continue
-
-        pid = parts[-1]
-        if pid.isdigit():
-            pids.add(pid)
-
-    return sorted(pids)
-
-
-def _windows_process_name(pid: str) -> str | None:
-    try:
-        result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return None
-
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("Image Name"):
-            continue
-        parts = [part for part in stripped.split() if part]
-        if len(parts) >= 2 and parts[1] == pid:
-            return parts[0]
-
-    return None
-
-
-def _windows_listening_processes(port: int) -> dict[str, str | None]:
-    if sys.platform != "win32":
-        return {}
-
-    processes: dict[str, str | None] = {}
-    for pid in _windows_listening_pids(port):
-        processes[pid] = _windows_process_name(pid)
-
-    return processes
-
-
-def _prompt_yes(question: str) -> bool:
-    try:
-        response = input(question).strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return False
-    return response in {"y", "yes"}
-
-
-def _print_windows_process_details(
-    port: int, listening_info: dict[str, str | None]
-) -> list[str]:
-    command_str = f"netstat -ano | findstr :{port}"
-    if not listening_info:
-        print(f"→ PID: (unavailable) (via `{command_str}`)")
-        return []
-
-    descriptions = []
-    for pid, name in listening_info.items():
-        if name:
-            descriptions.append(f"{pid} ({name})")
-        else:
-            descriptions.append(pid)
-
-    print(f"→ Listening: PID(s) {', '.join(descriptions)} (via `{command_str}`)")
-    return list(listening_info.keys())
-
-
-def _stop_commands(port: int, pids: list[str]) -> list[str]:
-    commands: list[str] = []
-    if sys.platform == "win32":
-        if pids:
-            for pid in pids:
-                commands.append(f'tasklist /FI "PID eq {pid}"')
-                commands.append(f"taskkill /PID {pid}")
-        else:
-            commands.append('tasklist /FI "PID eq <PID>"')
-            commands.append("taskkill /PID <PID>")
-            commands.append("Add /F if it refuses to stop.")
-    else:
-        commands.append(f"lsof -i :{port}")
-        commands.append("kill <PID>")
-    return commands
-
-
-def cmd_doctor(_args: argparse.Namespace) -> int:
-    """
-    Handle `blacktent doctor`.
-    """
-    ports = {
-        5432: "PostgreSQL",
-        5173: "frontend",
-        3001: "API",
+    mode = "env-doctor"
+    inputs = {
+        "env_file": str(args.env_file),
+        "schema_file": str(args.required_file),
+        "receipt_dir": str(args.receipt_dir),
     }
-    results = []
 
-    interactive = sys.stdin.isatty()
-    listening_ports: list[dict[str, object]] = []
-
-    for port, label in ports.items():
-        explanation = ""
-        listening_info: dict[str, str | None] = {}
-        listener_detected = False
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=2):
-                reachable = True
-        except OSError as exc:
-            reachable = False
-            err = getattr(exc, "errno", None)
-            if err in {
-                errno.ECONNREFUSED,
-                errno.EADDRNOTAVAIL,
-                errno.EHOSTUNREACH,
-                errno.ENETUNREACH,
-            }:
-                explanation = (
-                    "→ Nothing is listening on this port. "
-                    "This usually means the service is not running."
-                )
-            else:
-                explanation = (
-                    "→ A process is listening on this port. "
-                    "This may be a stale or different service."
-                )
-                listener_detected = True
-                listening_info = _windows_listening_processes(port)
-
-        symbol = "✓" if reachable else "✗"
-        print(f"{symbol} {label} (localhost:{port})")
-        results.append(reachable)
-        if not reachable and explanation:
-            print(explanation)
-        if listener_detected:
-            listening_ports.append(
-                {
-                    "port": port,
-                    "label": label,
-                    "info": listening_info,
-                }
+    try:
+        # Missing files are user-fixable
+        if not args.env_file.exists():
+            msg = f"Env file not found: {args.env_file}"
+            if not args.quiet:
+                print(msg)
+            write_receipt(
+                args.receipt_dir,
+                mode=mode,
+                status="invalid",
+                exit_code=EXIT_USER_FIXABLE,
+                inputs=inputs,
+                notes=[msg],
             )
+            return EXIT_USER_FIXABLE
 
-    if interactive and listening_ports:
-        if _prompt_yes(
-            "Would you like more information about one of these processes? (y/N): "
-        ):
-            for idx, entry in enumerate(listening_ports, start=1):
-                print(
-                    f"[{idx}] {entry['label']} (localhost:{entry['port']})"
-                )
-            try:
-                choice = input("Choose a port number (or Enter to skip): ").strip()
-            except (EOFError, KeyboardInterrupt):
-                choice = ""
-            if choice.isdigit():
-                idx = int(choice) - 1
-                if 0 <= idx < len(listening_ports):
-                    selected = listening_ports[idx]
-                    if sys.platform == "win32":
-                        pids = _print_windows_process_details(
-                            int(selected["port"]), selected["info"]
-                        )
-                    else:
-                        print("→ Detailed PID lookup is Windows-only on this OS.")
-                        pids = []
+        if not args.required_file.exists():
+            msg = f"Required schema file not found: {args.required_file}"
+            if not args.quiet:
+                print(msg)
+            write_receipt(
+                args.receipt_dir,
+                mode=mode,
+                status="invalid",
+                exit_code=EXIT_USER_FIXABLE,
+                inputs=inputs,
+                notes=[msg],
+            )
+            return EXIT_USER_FIXABLE
 
-                    if interactive and _prompt_yes(
-                        "Would you like to see how to stop this process? (y/N): "
-                    ):
-                        print("Here’s how this is usually handled, if helpful.")
-                        print("No changes will be made unless you choose to act.")
-                        for cmd in _stop_commands(int(selected["port"]), pids):
-                            print(f"→ {cmd}")
+        required_keys = load_required_keys(args.required_file)
+        env_map = parse_env_file(args.env_file)
 
-    print("No changes were made. This was a read-only diagnosis.")
-    return 0 if all(results) else 1
+        report = validate_env(env_map, required_keys)
+        if not args.quiet:
+            print(format_report(report))
+
+        ok = bool(getattr(report, "ok", False))
+        status = "ok" if ok else "invalid"
+        exit_code = EXIT_OK if ok else EXIT_USER_FIXABLE
+
+        write_receipt(
+            args.receipt_dir,
+            mode=mode,
+            status=status,
+            exit_code=exit_code,
+            inputs=inputs,
+        )
+        return exit_code
+
+    except Exception as e:
+        msg = f"Internal error running doctor env: {e.__class__.__name__}: {e}"
+        if not args.quiet:
+            print(msg, file=sys.stderr)
+        write_receipt(
+            args.receipt_dir,
+            mode=mode,
+            status="error",
+            exit_code=EXIT_INTERNAL_ERROR,
+            inputs=inputs,
+            notes=[msg],
+        )
+        return EXIT_INTERNAL_ERROR
 
 
-def _write_env_receipt(
-    env_path: Path, schema_file: str, status: str
-) -> None:
-    ensure_runtime_dir()
-    now = datetime.utcnow()
-    receipt = {
-        "timestamp": now.isoformat() + "Z",
-        "mode": "env-doctor",
-        "env_file": str(env_path),
-        "schema_file": schema_file,
-        "status": status,
-        "actions": [],
+@dataclass(frozen=True)
+class DoctorRepoArgs:
+    target_repo_path: Path
+    intent: str
+    receipt_dir: Path
+    quiet: bool
+    apply: bool
+
+
+def cmd_doctor_repo(args: DoctorRepoArgs) -> int:
+    """
+    Repo Doctor (v0 stub): accept intent + target repo path and write a receipt.
+    Next slice: Detect -> Explain -> Propose -> Apply -> Verify.
+    """
+    mode = "repo-doctor"
+    inputs = {
+        "target_repo_path": str(args.target_repo_path),
+        "intent": args.intent,
+        "apply": bool(args.apply),
+        "receipt_dir": str(args.receipt_dir),
     }
-    name = f"receipt-{now.strftime('%Y%m%dT%H%M%SZ')}.json"
-    receipt_path = RUNTIME_DIR / name
-    with receipt_path.open("w", encoding="utf-8") as f:
-        json.dump(receipt, f, indent=2)
-
-
-def cmd_doctor_env(args: argparse.Namespace) -> int:
-    env_path = Path(args.env)
-    require_file = Path(args.require_file) if args.require_file else None
 
     try:
-        required_keys = load_required_keys(args.require, require_file)
-    except FileNotFoundError as exc:
-        print(f"[blacktent] ❌ {exc}", file=sys.stderr)
-        return 2
+        if not args.target_repo_path.exists():
+            msg = f"Target repo path not found: {args.target_repo_path}"
+            if not args.quiet:
+                print(msg)
+            write_receipt(
+                args.receipt_dir,
+                mode=mode,
+                status="invalid",
+                exit_code=EXIT_USER_FIXABLE,
+                inputs=inputs,
+                notes=[msg],
+            )
+            return EXIT_USER_FIXABLE
 
-    env_data, parse_issues = parse_env_file(env_path)
-    parse_missing = any(
-        issue.key == "(file)" and issue.issue == "missing" for issue in parse_issues
-    )
-    if parse_missing:
-        print(format_report(env_path, parse_issues, []))
-        schema_file_value = str(require_file) if require_file else ""
-        _write_env_receipt(env_path, schema_file_value, "invalid")
-        return 2
+        # Minimal success receipt
+        notes = [
+            "Stub OK: repo doctor entrypoint created.",
+            "Next: implement detect/explain/propose/apply/verify loop.",
+        ]
 
-    validation_issues = validate_env(env_data, required_keys)
-    report = format_report(env_path, parse_issues, validation_issues)
-    print(report)
+        if not args.quiet:
+            print("[doctor repo] stub ok — receipt written")
 
-    ok = not parse_issues and not validation_issues
-    schema_file_value = str(require_file) if require_file else ""
-    status_value = "ok" if ok else "invalid"
-    _write_env_receipt(env_path, schema_file_value, status_value)
-    return 0 if ok else 2
+        write_receipt(
+            args.receipt_dir,
+            mode=mode,
+            status="ok",
+            exit_code=EXIT_OK,
+            inputs=inputs,
+            notes=notes,
+        )
+        return EXIT_OK
+
+    except Exception as e:
+        msg = f"Internal error running doctor repo: {e.__class__.__name__}: {e}"
+        if not args.quiet:
+            print(msg, file=sys.stderr)
+        write_receipt(
+            args.receipt_dir,
+            mode=mode,
+            status="error",
+            exit_code=EXIT_INTERNAL_ERROR,
+            inputs=inputs,
+            notes=[msg],
+        )
+        return EXIT_INTERNAL_ERROR
 
 
+@dataclass(frozen=True)
+class ScanArgs:
+    receipt_dir: Path
+    quiet: bool
+
+
+def cmd_scan_bundle(args: ScanArgs) -> int:
+    """
+    Optional scan/bundle feature.
+    If the optional module isn't available, return 2 (user-fixable / feature unavailable).
+    """
+    mode = "scan-bundle"
+    inputs = {"receipt_dir": str(args.receipt_dir)}
+
+    if scan_and_bundle is None:
+        msg = "Redaction/bundling is not available in this build."
+        if not args.quiet:
+            print(msg)
+        write_receipt(
+            args.receipt_dir,
+            mode=mode,
+            status="invalid",
+            exit_code=EXIT_USER_FIXABLE,
+            inputs=inputs,
+            notes=["Feature unavailable: blacktent.redaction not installed/present."],
+        )
+        return EXIT_USER_FIXABLE
+
+    # If present, run it (or keep as placeholder if scan_and_bundle expects args later)
+    try:
+        # Minimal “present” path — don’t assume its signature; just acknowledge availability.
+        msg = "scan_and_bundle is available, but this command is not wired to inputs yet."
+        if not args.quiet:
+            print(msg)
+        write_receipt(
+            args.receipt_dir,
+            mode=mode,
+            status="ok",
+            exit_code=EXIT_OK,
+            inputs=inputs,
+            notes=[msg],
+        )
+        return EXIT_OK
+    except Exception as e:
+        msg = f"Internal error running scan: {e.__class__.__name__}: {e}"
+        if not args.quiet:
+            print(msg, file=sys.stderr)
+        write_receipt(
+            args.receipt_dir,
+            mode=mode,
+            status="error",
+            exit_code=EXIT_INTERNAL_ERROR,
+            inputs=inputs,
+            notes=[msg],
+        )
+        return EXIT_INTERNAL_ERROR
+
+
+# ----------------------------
+# Parser
+# ----------------------------
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="blacktent",
-        description=(
-            "BlackTent — a safe AI debugging tent.\n\n"
-            "This CLI manages sessions that will be connected to "
-            "ephemeral Docker sandboxes in later versions."
-        ),
+    p = argparse.ArgumentParser(prog="blacktent", description="BlackTent CLI")
+
+    p.add_argument(
+        "--receipt-dir",
+        default=str(DEFAULT_RECEIPT_DIR),
+        help="Directory to write JSON receipts (default: .blacktent/)",
+    )
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress human-readable output; still writes receipts",
     )
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="cmd", required=True)
 
-    # blacktent open <file>
-    p_open = subparsers.add_parser(
-        "open", help="Open a safe BlackTent session for a given file."
-    )
-    p_open.add_argument(
-        "path",
-        metavar="PATH",
-        help="Path to the file you want to work on safely.",
-    )
-    p_open.set_defaults(func=cmd_open)
+    # doctor
+    p_doctor = sub.add_parser("doctor", help="Diagnostics and sanity checks")
+    sub_doctor = p_doctor.add_subparsers(dest="doctor_cmd", required=True)
 
-    # blacktent close
-    p_close = subparsers.add_parser(
-        "close", help="Close the current BlackTent session."
+    p_env = sub_doctor.add_parser("env", help="Validate an env file against a schema")
+    p_env.add_argument("--env", dest="env_file", required=True, help="Path to .env file")
+    p_env.add_argument(
+        "--required-file",
+        dest="required_file",
+        required=True,
+        help="Path to required env schema file",
     )
-    p_close.set_defaults(func=cmd_close)
+    p_env.set_defaults(_handler="doctor_env")
 
-    # blacktent status
-    p_status = subparsers.add_parser(
-        "status", help="Show the current BlackTent session, if any."
+    p_repo = sub_doctor.add_parser("repo", help="Doctor a target repo (stub)")
+    p_repo.add_argument("target_repo_path", help="Path to the target repo")
+    p_repo.add_argument("intent", help='Intent sentence (wrap in quotes)')
+    p_repo.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply proposed changes (default: dry-run)",
     )
-    p_status.set_defaults(func=cmd_status)
+    p_repo.set_defaults(_handler="doctor_repo")
 
-    # blacktent shell
-    p_shell = subparsers.add_parser(
-        "shell", help="Launch an ephemeral Docker sandbox for the active bundle."
-    )
-    p_shell.set_defaults(func=cmd_shell)
+    # scan (optional)
+    p_scan = sub.add_parser("scan", help="(Optional) scan/bundle/redaction helpers")
+    p_scan.set_defaults(_handler="scan_bundle")
 
-    # blacktent doctor
-    p_doctor = subparsers.add_parser(
-        "doctor", help="Check local services without making changes."
-    )
-    p_doctor.set_defaults(func=cmd_doctor)
-
-    doctor_subparsers = p_doctor.add_subparsers(dest="doctor_subcommand")
-    doctor_subparsers.required = False
-
-    p_doctor_env = doctor_subparsers.add_parser(
-        "env", help="Run Mode 3 Environment Sanity checks."
-    )
-    p_doctor_env.add_argument(
-        "--env",
-        default=".env",
-        help="Path to the .env file to validate.",
-    )
-    p_doctor_env.add_argument(
-        "--require",
-        default="",
-        help="Comma-separated list of required env keys.",
-    )
-    p_doctor_env.add_argument(
-        "--require-file",
-        default="",
-        help="Path to a file listing required env keys, one per line.",
-    )
-    p_doctor_env.set_defaults(func=cmd_doctor_env)
-
-    return parser
+    return p
 
 
-def main(argv: list[str] | None = None) -> int:
-    """
-    Main entrypoint for the BlackTent CLI.
-    """
+def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    ns = parser.parse_args(argv)
 
-    func = getattr(args, "func", None)
-    if func is None:
-        parser.print_help()
-        return 1
+    receipt_dir = Path(ns.receipt_dir)
+    quiet = bool(ns.quiet)
 
-    return func(args)
+    handler = getattr(ns, "_handler", None)
+
+    if handler == "doctor_env":
+        args = DoctorEnvArgs(
+            env_file=Path(ns.env_file),
+            required_file=Path(ns.required_file),
+            receipt_dir=receipt_dir,
+            quiet=quiet,
+        )
+        return cmd_doctor_env(args)
+
+    if handler == "doctor_repo":
+        args = DoctorRepoArgs(
+            target_repo_path=Path(ns.target_repo_path),
+            intent=str(ns.intent),
+            receipt_dir=receipt_dir,
+            quiet=quiet,
+            apply=bool(ns.apply),
+        )
+        return cmd_doctor_repo(args)
+
+    if handler == "scan_bundle":
+        args = ScanArgs(receipt_dir=receipt_dir, quiet=quiet)
+        return cmd_scan_bundle(args)
+
+    parser.print_help()
+    return EXIT_USER_FIXABLE
 
 
 if __name__ == "__main__":
