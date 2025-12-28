@@ -187,20 +187,54 @@ class DoctorRepoArgs:
     receipt_dir: Path
     quiet: bool
     apply: bool
+    print_plan: bool
 
 
 def cmd_doctor_repo(args: DoctorRepoArgs) -> int:
     """
-    Repo Doctor (v0 stub): accept intent + target repo path and write a receipt.
-    Next slice: Detect -> Explain -> Propose -> Apply -> Verify.
+    Repo Doctor (v1): Detect + Explain.
+    Repo Doctor (v2 step): Propose (dry-run only; no apply yet).
     """
     mode = "repo-doctor"
     inputs = {
         "target_repo_path": str(args.target_repo_path),
         "intent": args.intent,
         "apply": bool(args.apply),
+        "print_plan": bool(args.print_plan),
         "receipt_dir": str(args.receipt_dir),
     }
+
+    def _read_text(path: Path, max_bytes: int = 200_000) -> str:
+        try:
+            b = path.read_bytes()
+            if len(b) > max_bytes:
+                b = b[:max_bytes]
+            return b.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    def _env_kind(env_value: str) -> str:
+        v = env_value.strip().lower()
+        if v.startswith("postgres://") or v.startswith("postgresql://"):
+            return "postgres"
+        if v.startswith("mysql://") or v.startswith("mariadb://"):
+            return "mysql"
+        return "unknown"
+
+    def _extract_database_url_kind(dotenv_path: Path) -> str:
+        if not dotenv_path.exists():
+            return "missing"
+        text = _read_text(dotenv_path)
+        # super simple parse: look for DATABASE_URL=...
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if s.startswith("DATABASE_URL="):
+                # do NOT store the value, only classify
+                val = s.split("=", 1)[1].strip().strip('"').strip("'")
+                return _env_kind(val)
+        return "absent"
 
     try:
         if not args.target_repo_path.exists():
@@ -214,17 +248,148 @@ def cmd_doctor_repo(args: DoctorRepoArgs) -> int:
                 exit_code=EXIT_USER_FIXABLE,
                 inputs=inputs,
                 notes=[msg],
+                prefix="receipt-doctor-repo",
             )
             return EXIT_USER_FIXABLE
 
-        # Minimal success receipt
-        notes = [
-            "Stub OK: repo doctor entrypoint created.",
-            "Next: implement detect/explain/propose/apply/verify loop.",
+        repo = args.target_repo_path
+        pkg = repo / "package.json"
+        dotenv_candidates = [
+            repo / ".env",
+            repo / "server" / ".env",
+            repo / "apps" / "server" / ".env",
+            repo / "src" / "server" / ".env",
         ]
+        found_dotenv = next((p for p in dotenv_candidates if p.exists()), None)
+        dotenv = found_dotenv if found_dotenv is not None else repo / ".env"
+
+        notes: list[str] = []
+        actions: list[dict[str, Any]] = []
+
+        # Detect: package.json exists?
+        if not pkg.exists():
+            notes.append("No package.json found at repo root — cannot infer scripts/deps.")
+        else:
+            pkg_text = _read_text(pkg)
+            actions.append({"detect": "package.json_found", "path": str(pkg)})
+
+            # quick indicators (string search; safe and fast)
+            has_tsx = '"tsx"' in pkg_text or " tsx " in pkg_text or "tsx/" in pkg_text
+            if has_tsx:
+                notes.append(
+                    "Detected tsx usage in package.json scripts/deps (common crash point if version mismatched)."
+                )
+
+            # DB driver hints from package.json
+            has_mysql2 = '"mysql2"' in pkg_text or "mysql2" in pkg_text
+            has_pg = '"pg"' in pkg_text or '"@types/pg"' in pkg_text or " pg " in pkg_text
+            if has_mysql2:
+                notes.append("Detected mysql2 dependency mention in package.json.")
+            if has_pg:
+                notes.append("Detected pg (Postgres) dependency mention in package.json.")
+
+        # Detect: DATABASE_URL kind (without storing secret)
+        db_kind = _extract_database_url_kind(dotenv)
+        if found_dotenv is not None:
+            notes.append(f"Using .env at: {found_dotenv}")
+        if db_kind == "missing":
+            notes.append("No .env found at repo root (DATABASE_URL check skipped).")
+        elif db_kind == "absent":
+            notes.append(".env found but DATABASE_URL is not set (DB config likely missing).")
+        else:
+            notes.append(f"DATABASE_URL appears to be: {db_kind} (classified without reading value).")
+
+        # Lightweight file scans for adapters (optional, fast)
+        likely_files = [
+            repo / "server" / "db.ts",
+            repo / "src" / "server" / "db.ts",
+            repo / "src" / "db.ts",
+            repo / "drizzle.config.ts",
+            repo / "drizzle.config.js",
+        ]
+        adapter_hits: list[str] = []
+        for f in likely_files:
+            if f.exists():
+                t = _read_text(f, max_bytes=150_000).lower()
+                if "mysql2" in t:
+                    adapter_hits.append(f"{f} mentions mysql2")
+                if "drizzle-orm/mysql" in t or "drizzle-orm/mysql2" in t:
+                    adapter_hits.append(f"{f} mentions drizzle mysql adapter")
+                if "drizzle-orm/postgres" in t or "drizzle-orm/node-postgres" in t:
+                    adapter_hits.append(f"{f} mentions drizzle postgres adapter")
+                if "pg" in t and "node-postgres" in t:
+                    adapter_hits.append(f"{f} mentions node-postgres (pg)")
+        if adapter_hits:
+            notes.extend(adapter_hits)
+
+        # Explain: flag likely mismatch
+        mismatch_flags: list[str] = []
+        text_notes = " ".join(notes).lower()
+        if "database_url appears to be: postgres" in text_notes and "mysql2" in text_notes:
+            mismatch_flags.append("Likely mismatch: DATABASE_URL is Postgres but code/deps reference mysql2.")
+        if "database_url appears to be: mysql" in text_notes and ("pg" in text_notes or "postgres" in text_notes):
+            mismatch_flags.append("Likely mismatch: DATABASE_URL is MySQL but code/deps reference Postgres/pg.")
+
+        # Propose (v2 step): add a structured proposal action (dry-run only)
+        if mismatch_flags:
+            actions.append(
+                {
+                    "propose": "align_db_driver",
+                    "summary": "DATABASE_URL is Postgres but mysql2 is installed/referenced.",
+                    "suggested_changes": [
+                        "Remove mysql2 from package.json dependencies",
+                        "Ensure drizzle uses Postgres adapter exclusively",
+                        "Verify server startup loads DATABASE_URL before DB init",
+                    ],
+                    "confidence": "high",
+                    "apply_safe": False,
+                }
+            )
+
+            notes.extend(mismatch_flags)
+            notes.append(
+                "Next step: Doctor should propose a single patch to align DB adapter with DATABASE_URL (no auto-apply yet)."
+            )
+            if args.print_plan and any(
+                "postgres" in flag.lower() and "mysql2" in flag.lower()
+                for flag in mismatch_flags
+            ):
+                pkg_lines = pkg_text.splitlines()
+                mysql_idx = next(
+                    (idx for idx, line in enumerate(pkg_lines) if '"mysql2"' in line), None
+                )
+                if mysql_idx is not None:
+                    start = max(0, mysql_idx - 2)
+                    end = min(len(pkg_lines), mysql_idx + 4)
+                    context = pkg_lines[start:end]
+                else:
+                    context = ['    "mysql2": "<version>"', '    // remove when using Postgres']
+
+                diff_lines = ["@@ package.json"]
+                for line in context:
+                    stripped = line.strip()
+                    if '"mysql2"' in stripped:
+                        diff_lines.append(f"-{stripped}")
+                        diff_lines.append("+    // mysql2 removed to align with Postgres")
+                    else:
+                        diff_lines.append(f" {stripped}")
+                diff_preview = "\n".join(diff_lines)
+
+                actions.append(
+                    {
+                        "plan": [
+                            {
+                                "op": "edit",
+                                "path": str(pkg),
+                                "summary": "Drop mysql2 when DATABASE_URL is Postgres-only.",
+                                "diff_preview": diff_preview,
+                            }
+                        ]
+                    }
+                )
 
         if not args.quiet:
-            print("[doctor repo] stub ok — receipt written")
+            print("[doctor repo] detect/explain complete — receipt written")
 
         write_receipt(
             args.receipt_dir,
@@ -232,7 +397,9 @@ def cmd_doctor_repo(args: DoctorRepoArgs) -> int:
             status="ok",
             exit_code=EXIT_OK,
             inputs=inputs,
-            notes=notes,
+            actions=actions,
+            notes=notes or ["No notable signals detected yet."],
+            prefix="receipt-doctor-repo",
         )
         return EXIT_OK
 
@@ -247,6 +414,7 @@ def cmd_doctor_repo(args: DoctorRepoArgs) -> int:
             exit_code=EXIT_INTERNAL_ERROR,
             inputs=inputs,
             notes=[msg],
+            prefix="receipt-doctor-repo",
         )
         return EXIT_INTERNAL_ERROR
 
@@ -279,9 +447,7 @@ def cmd_scan_bundle(args: ScanArgs) -> int:
         )
         return EXIT_USER_FIXABLE
 
-    # If present, run it (or keep as placeholder if scan_and_bundle expects args later)
     try:
-        # Minimal “present” path — don’t assume its signature; just acknowledge availability.
         msg = "scan_and_bundle is available, but this command is not wired to inputs yet."
         if not args.quiet:
             print(msg)
@@ -342,13 +508,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_env.set_defaults(_handler="doctor_env")
 
-    p_repo = sub_doctor.add_parser("repo", help="Doctor a target repo (stub)")
+    p_repo = sub_doctor.add_parser("repo", help="Doctor a target repo (detect/explain)")
     p_repo.add_argument("target_repo_path", help="Path to the target repo")
     p_repo.add_argument("intent", help='Intent sentence (wrap in quotes)')
     p_repo.add_argument(
         "--apply",
         action="store_true",
         help="Apply proposed changes (default: dry-run)",
+    )
+    p_repo.add_argument(
+        "--print-plan",
+        action="store_true",
+        help="Show a plan with diff previews for detected fixes",
     )
     p_repo.set_defaults(_handler="doctor_repo")
 
@@ -384,6 +555,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             receipt_dir=receipt_dir,
             quiet=quiet,
             apply=bool(ns.apply),
+            print_plan=bool(getattr(ns, "print_plan", False)),
         )
         return cmd_doctor_repo(args)
 
