@@ -14,6 +14,7 @@ from .env_sanity import (
     parse_env_file,
     validate_env,
 )
+from .health.runner import HealthState, default_checks, run_health_checks
 
 # Optional feature: redaction/bundling. Core commands (like doctor env/repo) must run without it.
 try:
@@ -460,6 +461,8 @@ def cmd_scan_bundle(args: ScanArgs) -> int:
             notes=[msg],
         )
         return EXIT_OK
+
+
     except Exception as e:
         msg = f"Internal error running scan: {e.__class__.__name__}: {e}"
         if not args.quiet:
@@ -473,6 +476,23 @@ def cmd_scan_bundle(args: ScanArgs) -> int:
             notes=[msg],
         )
         return EXIT_INTERNAL_ERROR
+
+
+def cmd_health(_args: argparse.Namespace) -> int:
+    """
+    Run the health contract and summarize results.
+    """
+    report = run_health_checks(default_checks())
+    print(f"Health state: {report.state.value}")
+    for check in report.checks:
+        status = check.status.value.upper()
+        req = "required" if check.required else "optional"
+        base_line = f"[{status}] {check.check_id} ({req}) - {check.description}"
+        if check.details:
+            print(f"{base_line}\n    {check.details}")
+        else:
+            print(base_line)
+    return EXIT_OK if report.state == HealthState.HEALTHY else EXIT_INTERNAL_ERROR
 
 
 # ----------------------------
@@ -523,6 +543,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_repo.set_defaults(_handler="doctor_repo")
 
+    p_health = sub.add_parser("health", help="Run local health checks (runtime-only today).")
+    p_health.set_defaults(_handler="health")
+
     # scan (optional)
     p_scan = sub.add_parser("scan", help="(Optional) scan/bundle/redaction helpers")
     p_scan.set_defaults(_handler="scan_bundle")
@@ -558,6 +581,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             print_plan=bool(getattr(ns, "print_plan", False)),
         )
         return cmd_doctor_repo(args)
+
+    if handler == "health":
+        return cmd_health(ns)
 
     if handler == "scan_bundle":
         args = ScanArgs(receipt_dir=receipt_dir, quiet=quiet)
