@@ -420,6 +420,23 @@ def cmd_doctor_repo(args: DoctorRepoArgs) -> int:
         return EXIT_INTERNAL_ERROR
 
 
+def cmd_doctor_mvp(args: argparse.Namespace) -> int:
+    """
+    Default Doctor MVP pipeline when no subcommand is provided.
+    """
+    default_repo = Path(".").resolve()
+    return cmd_doctor_repo(
+        DoctorRepoArgs(
+            target_repo_path=default_repo,
+            intent=f"Default MVP run on {default_repo}",
+            receipt_dir=Path(args.receipt_dir),
+            quiet=bool(args.quiet),
+            apply=False,
+            print_plan=False,
+        )
+    )
+
+
 @dataclass(frozen=True)
 class ScanArgs:
     receipt_dir: Path
@@ -516,7 +533,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # doctor
     p_doctor = sub.add_parser("doctor", help="Diagnostics and sanity checks")
-    sub_doctor = p_doctor.add_subparsers(dest="doctor_cmd", required=True)
+    sub_doctor = p_doctor.add_subparsers(dest="doctor_cmd", required=False)
+    p_doctor.set_defaults(_handler="doctor_mvp")
 
     p_env = sub_doctor.add_parser("env", help="Validate an env file against a schema")
     p_env.add_argument("--env", dest="env_file", required=True, help="Path to .env file")
@@ -582,6 +600,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return cmd_doctor_repo(args)
 
+    if handler == "doctor_mvp":
+        return cmd_doctor_mvp(ns)
+
     if handler == "health":
         return cmd_health(ns)
 
@@ -589,7 +610,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         args = ScanArgs(receipt_dir=receipt_dir, quiet=quiet)
         return cmd_scan_bundle(args)
 
-    parser.print_help()
+        parser.print_help()
     return EXIT_USER_FIXABLE
 
 
