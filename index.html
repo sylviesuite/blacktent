@@ -7,13 +7,19 @@
   </head>
   <body>
     <h1>BlackTent Boot Doctor</h1>
-    <button id="diagnose">Diagnose</button>
+    <div style="display: flex; gap: 0.5rem;">
+      <button id="diagnose">Diagnose</button>
+      <button id="clear">Clear</button>
+    </div>
     <p id="status">Status pending.</p>
+    <p id="last-run" style="margin-bottom:0.5rem;">Last run: —</p>
     <div id="checks"></div>
     <div id="suggested"></div>
     <script>
       const button = document.getElementById("diagnose");
+      const clearButton = document.getElementById("clear");
       const statusEl = document.getElementById("status");
+      const lastRunEl = document.getElementById("last-run");
       const checksEl = document.getElementById("checks");
       const suggestedEl = document.getElementById("suggested");
 
@@ -54,6 +60,30 @@
         suggestedEl.appendChild(wrapper);
       }
 
+      function persistResult(result) {
+        localStorage.setItem("bootDoctor:lastResult", JSON.stringify(result));
+        localStorage.setItem("bootDoctor:lastRun", new Date().toISOString());
+      }
+
+      function loadLastResult() {
+        const stored = localStorage.getItem("bootDoctor:lastResult");
+        const lastRun = localStorage.getItem("bootDoctor:lastRun");
+        if (!stored || !lastRun) {
+          lastRunEl.textContent = "Last run: —";
+          resetView();
+          statusEl.textContent = "Status pending.";
+          return null;
+        }
+        lastRunEl.textContent = `Last run: ${new Date(lastRun).toLocaleString()}`;
+        const parsed = JSON.parse(stored);
+        renderChecks(parsed.checks || []);
+        if (parsed.suggested_url) {
+          renderSuggestedUrl(parsed.suggested_url);
+        }
+        statusEl.textContent = parsed.status === "ok" ? "OK" : "Warning";
+        return parsed;
+      }
+
       button.addEventListener("click", async () => {
         button.disabled = true;
         statusEl.textContent = "Scanning...";
@@ -62,17 +92,24 @@
           const result = await window.require("electron").ipcRenderer.invoke(
             "bootDoctor:scan"
           );
-          statusEl.textContent = result.status === "ok" ? "OK" : "Warning";
-          renderChecks(result.checks || []);
-          if (result.suggested_url) {
-            renderSuggestedUrl(result.suggested_url);
-          }
+          persistResult(result);
+          loadLastResult();
         } catch (err) {
           statusEl.textContent = `Error: ${err.message || err}`;
         } finally {
           button.disabled = false;
         }
       });
+
+      clearButton.addEventListener("click", () => {
+        localStorage.removeItem("bootDoctor:lastResult");
+        localStorage.removeItem("bootDoctor:lastRun");
+        resetView();
+        statusEl.textContent = "Status pending.";
+        lastRunEl.textContent = "Last run: —";
+      });
+
+      loadLastResult();
     </script>
   </body>
 </html>
