@@ -155,3 +155,8 @@ __pycache__/
 *.redact
 session.json
 tatus
+
+# Local scratch files
+nul
+bt.py
+blacktent/health/checks/env_vars.py
