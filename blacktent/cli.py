@@ -15,6 +15,7 @@ from .env_sanity import (
     validate_env,
 )
 from .health.runner import HealthState, default_checks, run_health_checks
+from .mechanics.boot_doctor import scan_dev_server
 
 # Optional feature: redaction/bundling. Core commands (like doctor env/repo) must run without it.
 try:
@@ -420,6 +421,23 @@ def cmd_doctor_repo(args: DoctorRepoArgs) -> int:
         return EXIT_INTERNAL_ERROR
 
 
+def cmd_doctor_boot(_args: argparse.Namespace) -> int:
+    """
+    Boot Doctor port scan for local dev server.
+    """
+    status = scan_dev_server()
+    if status.running and status.url:
+        print("OK: Dev server detected")
+        print(f"  Title: Dev server detected")
+        print(f"  Message: Boot Doctor found a running dev server at {status.url}")
+        print(f"  URL: {status.url}")
+    else:
+        print("Warning: No dev server detected")
+        print("  Title: No dev server detected")
+        print("  Message: Ports 5173–5180 were scanned and no HTTP process responded.")
+    return EXIT_OK
+
+
 def cmd_doctor_mvp(args: argparse.Namespace) -> int:
     """
     Default Doctor MVP pipeline when no subcommand is provided.
@@ -561,6 +579,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_repo.set_defaults(_handler="doctor_repo")
 
+    p_boot = sub_doctor.add_parser(
+        "boot", help="Check for a running dev server on ports 5173–5180"
+    )
+    p_boot.set_defaults(_handler="doctor_boot")
+
     p_health = sub.add_parser("health", help="Run local health checks (runtime-only today).")
     p_health.set_defaults(_handler="health")
 
@@ -599,6 +622,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             print_plan=bool(getattr(ns, "print_plan", False)),
         )
         return cmd_doctor_repo(args)
+
+    if handler == "doctor_boot":
+        return cmd_doctor_boot(ns)
 
     if handler == "doctor_mvp":
         return cmd_doctor_mvp(ns)
