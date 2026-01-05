@@ -15,7 +15,11 @@ from .env_sanity import (
     validate_env,
 )
 from .health.runner import HealthState, default_checks, run_health_checks
-from .mechanics.boot_doctor import check_node_dependencies, scan_dev_server
+from .mechanics.boot_doctor import (
+    check_node_dependencies,
+    check_node_version,
+    scan_dev_server,
+)
 
 # Optional feature: redaction/bundling. Core commands (like doctor env/repo) must run without it.
 try:
@@ -439,6 +443,10 @@ def cmd_doctor_boot(_args: argparse.Namespace) -> int:
     dep_status, dep_message = check_node_dependencies(Path("."))
     print(f"\nDependency check: {dep_status.upper()}")
     print(f"  Message: {dep_message}")
+
+    node_status, node_message = check_node_version(Path("."))
+    print(f"\nNode check: {node_status.upper()}")
+    print(f"  Message: {node_message}")
     return EXIT_OK
 
 
