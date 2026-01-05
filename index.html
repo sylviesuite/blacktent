@@ -6,8 +6,74 @@
     <title>BlackTent UI</title>
   </head>
   <body>
-    <h1>BlackTent UI loading…</h1>
-    <p>The Electron shell is ready for future mechanics tooling.</p>
+    <h1>BlackTent Boot Doctor</h1>
+    <button id="diagnose">Diagnose</button>
+    <p id="status">Status pending.</p>
+    <div id="checks"></div>
+    <div id="suggested"></div>
+    <script>
+      const button = document.getElementById("diagnose");
+      const statusEl = document.getElementById("status");
+      const checksEl = document.getElementById("checks");
+      const suggestedEl = document.getElementById("suggested");
+
+      function resetView() {
+        checksEl.innerHTML = "";
+        suggestedEl.innerHTML = "";
+      }
+
+      function renderChecks(checks) {
+        resetView();
+        checks.forEach((check) => {
+          const row = document.createElement("div");
+          row.style.marginTop = "0.5rem";
+          row.textContent = `${check.title}: ${check.message}`;
+          checksEl.appendChild(row);
+        });
+      }
+
+      function renderSuggestedUrl(url) {
+        const wrapper = document.createElement("div");
+        wrapper.style.marginTop = "1rem";
+        const label = document.createElement("span");
+        label.textContent = "Open:";
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.textContent = url;
+        anchor.target = "_blank";
+        anchor.style.marginLeft = "0.5rem";
+        const copyButton = document.createElement("button");
+        copyButton.textContent = "Copy";
+        copyButton.style.marginLeft = "0.5rem";
+        copyButton.addEventListener("click", () => {
+          navigator.clipboard.writeText(url);
+        });
+        wrapper.appendChild(label);
+        wrapper.appendChild(anchor);
+        wrapper.appendChild(copyButton);
+        suggestedEl.appendChild(wrapper);
+      }
+
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        statusEl.textContent = "Scanning...";
+        resetView();
+        try {
+          const result = await window.require("electron").ipcRenderer.invoke(
+            "bootDoctor:scan"
+          );
+          statusEl.textContent = result.status === "ok" ? "OK" : "Warning";
+          renderChecks(result.checks || []);
+          if (result.suggested_url) {
+            renderSuggestedUrl(result.suggested_url);
+          }
+        } catch (err) {
+          statusEl.textContent = `Error: ${err.message || err}`;
+        } finally {
+          button.disabled = false;
+        }
+      });
+    </script>
   </body>
 </html>
 
