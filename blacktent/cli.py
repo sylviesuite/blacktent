@@ -15,7 +15,7 @@ from .env_sanity import (
     validate_env,
 )
 from .health.runner import HealthState, default_checks, run_health_checks
-from .mechanics.boot_doctor import scan_dev_server
+from .mechanics.boot_doctor import check_node_dependencies, scan_dev_server
 
 # Optional feature: redaction/bundling. Core commands (like doctor env/repo) must run without it.
 try:
@@ -435,6 +435,10 @@ def cmd_doctor_boot(_args: argparse.Namespace) -> int:
         print("Warning: No dev server detected")
         print("  Title: No dev server detected")
         print("  Message: Ports 5173–5180 were scanned and no HTTP process responded.")
+
+    dep_status, dep_message = check_node_dependencies(Path("."))
+    print(f"\nDependency check: {dep_status.upper()}")
+    print(f"  Message: {dep_message}")
     return EXIT_OK
 
 

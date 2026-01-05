@@ -7,6 +7,18 @@ from typing import Iterable
 DEFAULT_PORTS = range(5173, 5181)
 REQUEST_TIMEOUT = 0.5
 
+def check_node_dependencies(cwd: Path) -> tuple[str, str]:
+    pkg = cwd / "package.json"
+    node_modules = cwd / "node_modules"
+    if not pkg.exists():
+        return ("ok", "No package.json detected; dependency check skipped.")
+    if not node_modules.exists():
+        return (
+            "warning",
+            "package.json is present but node_modules/ missing. Run `npm install` or `pnpm install` to fetch dependencies.",
+        )
+    return ("ok", "node_modules/ is present.")
+
 
 @dataclass(frozen=True)
 class BootDoctorStatus:
