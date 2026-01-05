@@ -3,248 +3,52 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        script-src 'self';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data:;
+        connect-src 'self';
+        base-uri 'none';
+        form-action 'none';
+      "
+    />
     <title>BlackTent UI</title>
   </head>
-  <body>
-    <h1>BlackTent Boot Doctor</h1>
-    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
-      <button id="diagnose">Diagnose</button>
-      <button id="clear">Clear</button>
-      <button id="export" disabled>Export JSON</button>
-      <label style="display:flex; align-items:center; gap:0.25rem;">
-        <input type="checkbox" id="auto-run" />
-        Run Boot Doctor automatically on launch
-      </label>
-    </div>
-    <p id="status">Status pending.</p>
-    <p id="last-run" style="margin-bottom:0.5rem;">Last run: —</p>
-    <div id="checks"></div>
-    <div id="suggested" style="margin-top:0.5rem;"></div>
-    <script>
-      const button = document.getElementById("diagnose");
-      const clearButton = document.getElementById("clear");
-      const exportButton = document.getElementById("export");
-      const autoRunCheckbox = document.getElementById("auto-run");
-      const statusEl = document.getElementById("status");
-      const lastRunEl = document.getElementById("last-run");
-      const checksEl = document.getElementById("checks");
-      const suggestedEl = document.getElementById("suggested");
+  <body style="background:#f8fafc; color:#0f172a; font-family:system-ui,sans-serif; margin:0;">
+    <main style="max-width:900px; margin:0 auto; padding:2rem 1rem 3rem;">
+      <h1 style="margin-bottom:0.35rem; font-size:1.9rem; line-height:1.2;">BlackTent Boot Doctor</h1>
+      <p style="margin-top:0; color:#475569;">A calm status of your dev server, dependencies, and runtime.</p>
 
-      const statusColors = {
-        ok: "#2c7a4b",
-        warning: "#9f640b",
-      };
+      <div
+        style="
+          display: flex;
+          gap: 0.5rem;
+          flex-wrap: wrap;
+          align-items: center;
+          margin:1rem 0 0.5rem;
+        "
+      >
+        <button id="diagnose">Diagnose</button>
+        <button id="clear">Clear</button>
+        <button id="export" disabled>Export JSON</button>
 
-      const checkHints = {
-        dev_server:
-          "Why this matters: ensures your local dev workspace is reachable in the browser.",
-        dependencies:
-          "Why this matters: missing node_modules can block startup.",
-        node_version:
-          "Why this matters: Node mismatches often cause build failures.",
-      };
+        <label style="display: flex; align-items: center; gap: 0.25rem; font-size:0.9rem; color:#475569;">
+          <input type="checkbox" id="auto-run" />
+          Run Boot Doctor automatically on launch
+        </label>
+      </div>
 
-      const AUTO_RUN_KEY = "bootDoctor:autoRun";
-      let copyTimer;
-      let resultStatus = "Status pending.";
-      let autoRunTriggered = false;
-      let lastResult = null;
-      let lastResult = null;
+      <p id="status" style="margin:0; font-weight:600; padding:0.4rem 0.6rem; border-radius:6px; display:inline-block;">Status pending.</p>
+      <p id="last-run" style="margin-top:0.4rem; margin-bottom:0.5rem; color:#475569;">Last run: —</p>
 
-      function updateStatusDisplay(text, level) {
-        statusEl.textContent = text;
-        if (level && statusColors[level]) {
-          statusEl.style.color = statusColors[level];
-        } else {
-          statusEl.style.removeProperty("color");
-        }
-      }
+      <div id="checks"></div>
+      <div id="suggested" style="margin-top:0.5rem"></div>
+    </main>
 
-      function updateExportAvailability() {
-        exportButton.disabled = !lastResult;
-      }
-
-      function updateExportAvailability() {
-        exportButton.disabled = !lastResult;
-      }
-
-      function resetView() {
-        checksEl.innerHTML = "";
-        suggestedEl.innerHTML = "";
-      }
-
-      function renderChecks(checks) {
-        resetView();
-        checks.forEach((check) => {
-          const row = document.createElement("div");
-          row.style.marginTop = "0.5rem";
-          const title = document.createElement("strong");
-          title.textContent = `${check.title}:`;
-          const message = document.createElement("span");
-          message.style.marginLeft = "0.25rem";
-          message.textContent = check.message;
-          row.appendChild(title);
-          row.appendChild(message);
-
-          const hint = document.createElement("div");
-          hint.style.fontSize = "0.85rem";
-          hint.style.color = "#555";
-          hint.style.marginTop = "0.25rem";
-          hint.textContent = checkHints[check.name] || "";
-
-          checksEl.appendChild(row);
-          checksEl.appendChild(hint);
-        });
-      }
-
-      function renderSuggestedUrl(url) {
-        suggestedEl.innerHTML = "";
-        if (!url) {
-          return;
-        }
-        const row = document.createElement("div");
-        row.style.marginTop = "1rem";
-        row.style.display = "flex";
-        row.style.alignItems = "center";
-        row.style.gap = "0.5rem";
-
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.textContent = url;
-        anchor.target = "_blank";
-
-        const copyButton = document.createElement("button");
-        copyButton.textContent = "Copy URL";
-        copyButton.addEventListener("click", async () => {
-          await navigator.clipboard.writeText(url);
-          updateStatusDisplay("Copied URL!", resultStatus.toLowerCase());
-          clearTimeout(copyTimer);
-          copyTimer = setTimeout(() => {
-            updateStatusDisplay(resultStatus, resultStatus.toLowerCase());
-          }, 2000);
-        });
-
-        const openButton = document.createElement("button");
-        openButton.textContent = "Open URL";
-        openButton.addEventListener("click", () => {
-          window.open(url, "_blank");
-        });
-
-        row.appendChild(anchor);
-        row.appendChild(copyButton);
-        row.appendChild(openButton);
-        suggestedEl.appendChild(row);
-      }
-
-      function persistResult(result) {
-        localStorage.setItem("bootDoctor:lastResult", JSON.stringify(result));
-        localStorage.setItem("bootDoctor:lastRun", new Date().toISOString());
-        lastResult = result;
-        updateExportAvailability();
-      }
-
-      function loadLastResult() {
-        const stored = localStorage.getItem("bootDoctor:lastResult");
-        const lastRun = localStorage.getItem("bootDoctor:lastRun");
-        if (!stored || !lastRun) {
-          lastRunEl.textContent = "Last run: —";
-          resetView();
-          resultStatus = "Status pending.";
-          updateStatusDisplay(resultStatus, null);
-          lastResult = null;
-          updateExportAvailability();
-          return null;
-        }
-        lastResult = JSON.parse(stored);
-        lastRunEl.textContent = `Last run: ${new Date(lastRun).toLocaleString()}`;
-        const parsed = lastResult;
-        renderChecks(parsed.checks || []);
-        if (parsed.suggested_url) {
-          renderSuggestedUrl(parsed.suggested_url);
-        }
-        resultStatus = parsed.status === "ok" ? "OK" : "Warning";
-        updateStatusDisplay(resultStatus, parsed.status);
-        updateExportAvailability();
-        return parsed;
-      }
-
-      async function runScan() {
-        if (button.disabled) {
-          return;
-        }
-        button.disabled = true;
-        updateStatusDisplay("Scanning...", null);
-        resetView();
-        try {
-          const result = await window.require("electron").ipcRenderer.invoke(
-            "bootDoctor:scan"
-          );
-          persistResult(result);
-          resultStatus = result.status === "ok" ? "OK" : "Warning";
-          updateStatusDisplay(resultStatus, result.status);
-          loadLastResult();
-        } catch (err) {
-          updateStatusDisplay(`Error: ${err.message || err}`, null);
-        } finally {
-          button.disabled = false;
-        }
-      }
-
-      function exportLastResult() {
-        if (!lastResult) {
-          return;
-        }
-        const timestamp = new Date().toISOString().replace(/[:]/g, "-").replace(/\..+/, "");
-        const filename = `blacktent-boot-doctor-${timestamp}.json`;
-        const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
-
-      function getAutoRunSetting() {
-        return localStorage.getItem(AUTO_RUN_KEY) === "1";
-      }
-
-      function applyAutoRunSetting(value) {
-        localStorage.setItem(AUTO_RUN_KEY, value ? "1" : "0");
-        autoRunCheckbox.checked = value;
-      }
-
-      function maybeAutoRun() {
-        if (getAutoRunSetting() && !autoRunTriggered && !button.disabled) {
-          autoRunTriggered = true;
-          runScan();
-        }
-      }
-
-      button.addEventListener("click", runScan);
-
-      clearButton.addEventListener("click", () => {
-        localStorage.removeItem("bootDoctor:lastResult");
-        localStorage.removeItem("bootDoctor:lastRun");
-        resetView();
-        resultStatus = "Status pending.";
-        updateStatusDisplay(resultStatus, null);
-        lastRunEl.textContent = "Last run: —";
-      });
-
-      autoRunCheckbox.addEventListener("change", (event) => {
-        applyAutoRunSetting(event.target.checked);
-      });
-
-      exportButton.addEventListener("click", exportLastResult);
-
-      applyAutoRunSetting(getAutoRunSetting());
-      loadLastResult();
-      updateExportAvailability();
-      maybeAutoRun();
-    </script>
+    <script src="./renderer.js"></script>
   </body>
 </html>
 
