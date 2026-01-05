@@ -28,19 +28,24 @@
       const checksEl = document.getElementById("checks");
       const suggestedEl = document.getElementById("suggested");
 
-      const checkHints = {
-        dev_server:
-          "Why this matters: ensures your local dev workspace is ready in the browser.",
-        dependencies:
-          "Why this matters: missing node_modules will block the dev server.",
-        node_version:
-          "Why this matters: mismatched Node can break the build/runtime.",
-      };
-
       const statusColors = {
         ok: "#2c7a4b",
         warning: "#9f640b",
       };
+
+      const checkHints = {
+        dev_server:
+          "Why this matters: ensures your local dev workspace is reachable in the browser.",
+        dependencies:
+          "Why this matters: missing node_modules can block startup.",
+        node_version:
+          "Why this matters: Node mismatches often cause build failures.",
+      };
+
+      const AUTO_RUN_KEY = "bootDoctor:autoRun";
+      let copyTimer;
+      let resultStatus = "Status pending.";
+      let autoRunTriggered = false;
 
       function updateStatusDisplay(text, level) {
         statusEl.textContent = text;
@@ -80,19 +85,11 @@
         });
       }
 
-      let copyTimer;
-      const checkHints = {
-        dev_server:
-          "Why this matters: ensures your local dev workspace is reachable in the browser.",
-        dependencies:
-          "Why this matters: missing node_modules can block startup.",
-        node_version:
-          "Why this matters: Node mismatches often cause build failures.",
-      };
-      let resultStatus = "Status pending.";
-
       function renderSuggestedUrl(url) {
         suggestedEl.innerHTML = "";
+        if (!url) {
+          return;
+        }
         const row = document.createElement("div");
         row.style.marginTop = "1rem";
         row.style.display = "flex";
@@ -108,10 +105,10 @@
         copyButton.textContent = "Copy URL";
         copyButton.addEventListener("click", async () => {
           await navigator.clipboard.writeText(url);
-          statusEl.textContent = "Copied URL!";
+          updateStatusDisplay("Copied URL!", resultStatus.toLowerCase());
           clearTimeout(copyTimer);
           copyTimer = setTimeout(() => {
-            statusEl.textContent = resultStatus || "Status pending.";
+            updateStatusDisplay(resultStatus, resultStatus.toLowerCase());
           }, 2000);
         });
 
@@ -153,7 +150,10 @@
         return parsed;
       }
 
-      button.addEventListener("click", async () => {
+      async function runScan() {
+        if (button.disabled) {
+          return;
+        }
         button.disabled = true;
         updateStatusDisplay("Scanning...", null);
         resetView();
@@ -162,15 +162,33 @@
             "bootDoctor:scan"
           );
           persistResult(result);
-        resultStatus = result.status === "ok" ? "OK" : "Warning";
-        updateStatusDisplay(resultStatus, result.status);
-        loadLastResult();
+          resultStatus = result.status === "ok" ? "OK" : "Warning";
+          updateStatusDisplay(resultStatus, result.status);
+          loadLastResult();
         } catch (err) {
           updateStatusDisplay(`Error: ${err.message || err}`, null);
         } finally {
           button.disabled = false;
         }
-      });
+      }
+
+      function getAutoRunSetting() {
+        return localStorage.getItem(AUTO_RUN_KEY) === "1";
+      }
+
+      function applyAutoRunSetting(value) {
+        localStorage.setItem(AUTO_RUN_KEY, value ? "1" : "0");
+        autoRunCheckbox.checked = value;
+      }
+
+      function maybeAutoRun() {
+        if (getAutoRunSetting() && !autoRunTriggered && !button.disabled) {
+          autoRunTriggered = true;
+          runScan();
+        }
+      }
+
+      button.addEventListener("click", runScan);
 
       clearButton.addEventListener("click", () => {
         localStorage.removeItem("bootDoctor:lastResult");
@@ -181,7 +199,13 @@
         lastRunEl.textContent = "Last run: —";
       });
 
+      autoRunCheckbox.addEventListener("change", (event) => {
+        applyAutoRunSetting(event.target.checked);
+      });
+
+      applyAutoRunSetting(getAutoRunSetting());
       loadLastResult();
+      maybeAutoRun();
     </script>
   </body>
 </html>
