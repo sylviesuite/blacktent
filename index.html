@@ -14,7 +14,7 @@
     <p id="status">Status pending.</p>
     <p id="last-run" style="margin-bottom:0.5rem;">Last run: —</p>
     <div id="checks"></div>
-    <div id="suggested"></div>
+    <div id="suggested" style="margin-top:0.5rem;"></div>
     <script>
       const button = document.getElementById("diagnose");
       const clearButton = document.getElementById("clear");
@@ -38,26 +38,44 @@
         });
       }
 
+      let copyTimer;
+      let copyTimer;
+      let resultStatus = "Status pending.";
+
       function renderSuggestedUrl(url) {
-        const wrapper = document.createElement("div");
-        wrapper.style.marginTop = "1rem";
-        const label = document.createElement("span");
-        label.textContent = "Open:";
+        suggestedEl.innerHTML = "";
+        const row = document.createElement("div");
+        row.style.marginTop = "1rem";
+        row.style.display = "flex";
+        row.style.alignItems = "center";
+        row.style.gap = "0.5rem";
+
         const anchor = document.createElement("a");
         anchor.href = url;
         anchor.textContent = url;
         anchor.target = "_blank";
-        anchor.style.marginLeft = "0.5rem";
+
         const copyButton = document.createElement("button");
-        copyButton.textContent = "Copy";
-        copyButton.style.marginLeft = "0.5rem";
-        copyButton.addEventListener("click", () => {
-          navigator.clipboard.writeText(url);
+        copyButton.textContent = "Copy URL";
+        copyButton.addEventListener("click", async () => {
+          await navigator.clipboard.writeText(url);
+          statusEl.textContent = "Copied URL!";
+          clearTimeout(copyTimer);
+          copyTimer = setTimeout(() => {
+            statusEl.textContent = resultStatus || "Status pending.";
+          }, 2000);
         });
-        wrapper.appendChild(label);
-        wrapper.appendChild(anchor);
-        wrapper.appendChild(copyButton);
-        suggestedEl.appendChild(wrapper);
+
+        const openButton = document.createElement("button");
+        openButton.textContent = "Open URL";
+        openButton.addEventListener("click", () => {
+          window.open(url, "_blank");
+        });
+
+        row.appendChild(anchor);
+        row.appendChild(copyButton);
+        row.appendChild(openButton);
+        suggestedEl.appendChild(row);
       }
 
       function persistResult(result) {
@@ -71,7 +89,8 @@
         if (!stored || !lastRun) {
           lastRunEl.textContent = "Last run: —";
           resetView();
-          statusEl.textContent = "Status pending.";
+          resultStatus = "Status pending.";
+          statusEl.textContent = resultStatus;
           return null;
         }
         lastRunEl.textContent = `Last run: ${new Date(lastRun).toLocaleString()}`;
@@ -80,7 +99,8 @@
         if (parsed.suggested_url) {
           renderSuggestedUrl(parsed.suggested_url);
         }
-        statusEl.textContent = parsed.status === "ok" ? "OK" : "Warning";
+        resultStatus = parsed.status === "ok" ? "OK" : "Warning";
+        statusEl.textContent = resultStatus;
         return parsed;
       }
 
@@ -93,6 +113,7 @@
             "bootDoctor:scan"
           );
           persistResult(result);
+          resultStatus = result.status === "ok" ? "OK" : "Warning";
           loadLastResult();
         } catch (err) {
           statusEl.textContent = `Error: ${err.message || err}`;
@@ -105,7 +126,8 @@
         localStorage.removeItem("bootDoctor:lastResult");
         localStorage.removeItem("bootDoctor:lastRun");
         resetView();
-        statusEl.textContent = "Status pending.";
+        resultStatus = "Status pending.";
+        statusEl.textContent = resultStatus;
         lastRunEl.textContent = "Last run: —";
       });
 
