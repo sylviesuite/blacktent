@@ -7,9 +7,13 @@
   </head>
   <body>
     <h1>BlackTent Boot Doctor</h1>
-    <div style="display: flex; gap: 0.5rem;">
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
       <button id="diagnose">Diagnose</button>
       <button id="clear">Clear</button>
+      <label style="display:flex; align-items:center; gap:0.25rem;">
+        <input type="checkbox" id="auto-run" />
+        Run Boot Doctor automatically on launch
+      </label>
     </div>
     <p id="status">Status pending.</p>
     <p id="last-run" style="margin-bottom:0.5rem;">Last run: —</p>
@@ -18,10 +22,34 @@
     <script>
       const button = document.getElementById("diagnose");
       const clearButton = document.getElementById("clear");
+      const autoRunCheckbox = document.getElementById("auto-run");
       const statusEl = document.getElementById("status");
       const lastRunEl = document.getElementById("last-run");
       const checksEl = document.getElementById("checks");
       const suggestedEl = document.getElementById("suggested");
+
+      const checkHints = {
+        dev_server:
+          "Why this matters: ensures your local dev workspace is ready in the browser.",
+        dependencies:
+          "Why this matters: missing node_modules will block the dev server.",
+        node_version:
+          "Why this matters: mismatched Node can break the build/runtime.",
+      };
+
+      const statusColors = {
+        ok: "#2c7a4b",
+        warning: "#9f640b",
+      };
+
+      function updateStatusDisplay(text, level) {
+        statusEl.textContent = text;
+        if (level && statusColors[level]) {
+          statusEl.style.color = statusColors[level];
+        } else {
+          statusEl.style.removeProperty("color");
+        }
+      }
 
       function resetView() {
         checksEl.innerHTML = "";
@@ -33,13 +61,34 @@
         checks.forEach((check) => {
           const row = document.createElement("div");
           row.style.marginTop = "0.5rem";
-          row.textContent = `${check.title}: ${check.message}`;
+          const title = document.createElement("strong");
+          title.textContent = `${check.title}:`;
+          const message = document.createElement("span");
+          message.style.marginLeft = "0.25rem";
+          message.textContent = check.message;
+          row.appendChild(title);
+          row.appendChild(message);
+
+          const hint = document.createElement("div");
+          hint.style.fontSize = "0.85rem";
+          hint.style.color = "#555";
+          hint.style.marginTop = "0.25rem";
+          hint.textContent = checkHints[check.name] || "";
+
           checksEl.appendChild(row);
+          checksEl.appendChild(hint);
         });
       }
 
       let copyTimer;
-      let copyTimer;
+      const checkHints = {
+        dev_server:
+          "Why this matters: ensures your local dev workspace is reachable in the browser.",
+        dependencies:
+          "Why this matters: missing node_modules can block startup.",
+        node_version:
+          "Why this matters: Node mismatches often cause build failures.",
+      };
       let resultStatus = "Status pending.";
 
       function renderSuggestedUrl(url) {
@@ -90,7 +139,7 @@
           lastRunEl.textContent = "Last run: —";
           resetView();
           resultStatus = "Status pending.";
-          statusEl.textContent = resultStatus;
+          updateStatusDisplay(resultStatus, null);
           return null;
         }
         lastRunEl.textContent = `Last run: ${new Date(lastRun).toLocaleString()}`;
@@ -100,23 +149,24 @@
           renderSuggestedUrl(parsed.suggested_url);
         }
         resultStatus = parsed.status === "ok" ? "OK" : "Warning";
-        statusEl.textContent = resultStatus;
+        updateStatusDisplay(resultStatus, parsed.status);
         return parsed;
       }
 
       button.addEventListener("click", async () => {
         button.disabled = true;
-        statusEl.textContent = "Scanning...";
+        updateStatusDisplay("Scanning...", null);
         resetView();
         try {
           const result = await window.require("electron").ipcRenderer.invoke(
             "bootDoctor:scan"
           );
           persistResult(result);
-          resultStatus = result.status === "ok" ? "OK" : "Warning";
-          loadLastResult();
+        resultStatus = result.status === "ok" ? "OK" : "Warning";
+        updateStatusDisplay(resultStatus, result.status);
+        loadLastResult();
         } catch (err) {
-          statusEl.textContent = `Error: ${err.message || err}`;
+          updateStatusDisplay(`Error: ${err.message || err}`, null);
         } finally {
           button.disabled = false;
         }
@@ -127,7 +177,7 @@
         localStorage.removeItem("bootDoctor:lastRun");
         resetView();
         resultStatus = "Status pending.";
-        statusEl.textContent = resultStatus;
+        updateStatusDisplay(resultStatus, null);
         lastRunEl.textContent = "Last run: —";
       });
 
