@@ -425,28 +425,72 @@ def cmd_doctor_repo(args: DoctorRepoArgs) -> int:
         return EXIT_INTERNAL_ERROR
 
 
-def cmd_doctor_boot(_args: argparse.Namespace) -> int:
+def cmd_doctor_boot(args: argparse.Namespace) -> int:
     """
     Boot Doctor port scan for local dev server.
     """
     status = scan_dev_server()
     if status.running and status.url:
-        print("OK: Dev server detected")
-        print(f"  Title: Dev server detected")
-        print(f"  Message: Boot Doctor found a running dev server at {status.url}")
-        print(f"  URL: {status.url}")
+        dev_check = {
+            "name": "dev_server",
+            "status": "ok",
+            "title": "Dev server detected",
+            "message": f"Boot Doctor found a running dev server at {status.url}",
+            "url": status.url,
+        }
     else:
-        print("Warning: No dev server detected")
-        print("  Title: No dev server detected")
-        print("  Message: Ports 5173–5180 were scanned and no HTTP process responded.")
+        dev_check = {
+            "name": "dev_server",
+            "status": "warning",
+            "title": "No dev server detected",
+            "message": "Ports 5173–5180 were scanned and no HTTP process responded.",
+            "url": None,
+        }
 
     dep_status, dep_message = check_node_dependencies(Path("."))
-    print(f"\nDependency check: {dep_status.upper()}")
-    print(f"  Message: {dep_message}")
+    dep_check = {
+        "name": "dependencies",
+        "status": dep_status,
+        "title": "Dependency check",
+        "message": dep_message,
+        "url": None,
+    }
 
     node_status, node_message = check_node_version(Path("."))
-    print(f"\nNode check: {node_status.upper()}")
-    print(f"  Message: {node_message}")
+    node_check = {
+        "name": "node_version",
+        "status": node_status,
+        "title": "Node version check",
+        "message": node_message,
+        "url": None,
+    }
+
+    checks = [dev_check, dep_check, node_check]
+    suggested_url = dev_check["url"] if dev_check["status"] == "ok" else None
+
+    if args.json:
+        output = {
+            "status": "warning" if dev_check["status"] == "warning" else "ok",
+            "checks": checks,
+            "suggested_url": suggested_url,
+        }
+        print(json.dumps(output, indent=2))
+        return EXIT_OK
+
+    if dev_check["status"] == "ok":
+        print("OK: Dev server detected")
+        print(f"  Title: {dev_check['title']}")
+        print(f"  Message: {dev_check['message']}")
+        print(f"  URL: {dev_check['url']}")
+    else:
+        print("Warning: No dev server detected")
+        print(f"  Title: {dev_check['title']}")
+        print(f"  Message: {dev_check['message']}")
+
+    print(f"\nDependency check: {dep_check['status'].upper()}")
+    print(f"  Message: {dep_check['message']}")
+    print(f"\nNode check: {node_check['status'].upper()}")
+    print(f"  Message: {node_check['message']}")
     return EXIT_OK
 
 
@@ -593,6 +637,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_boot = sub_doctor.add_parser(
         "boot", help="Check for a running dev server on ports 5173–5180"
+    )
+    p_boot.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit Boot Doctor diagnostics as JSON instead of formatted text.",
     )
     p_boot.set_defaults(_handler="doctor_boot")
 
