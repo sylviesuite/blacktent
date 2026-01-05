@@ -7,9 +7,10 @@
   </head>
   <body>
     <h1>BlackTent Boot Doctor</h1>
-    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
       <button id="diagnose">Diagnose</button>
       <button id="clear">Clear</button>
+      <button id="export" disabled>Export JSON</button>
       <label style="display:flex; align-items:center; gap:0.25rem;">
         <input type="checkbox" id="auto-run" />
         Run Boot Doctor automatically on launch
@@ -22,6 +23,7 @@
     <script>
       const button = document.getElementById("diagnose");
       const clearButton = document.getElementById("clear");
+      const exportButton = document.getElementById("export");
       const autoRunCheckbox = document.getElementById("auto-run");
       const statusEl = document.getElementById("status");
       const lastRunEl = document.getElementById("last-run");
@@ -46,6 +48,8 @@
       let copyTimer;
       let resultStatus = "Status pending.";
       let autoRunTriggered = false;
+      let lastResult = null;
+      let lastResult = null;
 
       function updateStatusDisplay(text, level) {
         statusEl.textContent = text;
@@ -54,6 +58,14 @@
         } else {
           statusEl.style.removeProperty("color");
         }
+      }
+
+      function updateExportAvailability() {
+        exportButton.disabled = !lastResult;
+      }
+
+      function updateExportAvailability() {
+        exportButton.disabled = !lastResult;
       }
 
       function resetView() {
@@ -127,6 +139,8 @@
       function persistResult(result) {
         localStorage.setItem("bootDoctor:lastResult", JSON.stringify(result));
         localStorage.setItem("bootDoctor:lastRun", new Date().toISOString());
+        lastResult = result;
+        updateExportAvailability();
       }
 
       function loadLastResult() {
@@ -137,16 +151,20 @@
           resetView();
           resultStatus = "Status pending.";
           updateStatusDisplay(resultStatus, null);
+          lastResult = null;
+          updateExportAvailability();
           return null;
         }
+        lastResult = JSON.parse(stored);
         lastRunEl.textContent = `Last run: ${new Date(lastRun).toLocaleString()}`;
-        const parsed = JSON.parse(stored);
+        const parsed = lastResult;
         renderChecks(parsed.checks || []);
         if (parsed.suggested_url) {
           renderSuggestedUrl(parsed.suggested_url);
         }
         resultStatus = parsed.status === "ok" ? "OK" : "Warning";
         updateStatusDisplay(resultStatus, parsed.status);
+        updateExportAvailability();
         return parsed;
       }
 
@@ -170,6 +188,23 @@
         } finally {
           button.disabled = false;
         }
+      }
+
+      function exportLastResult() {
+        if (!lastResult) {
+          return;
+        }
+        const timestamp = new Date().toISOString().replace(/[:]/g, "-").replace(/\..+/, "");
+        const filename = `blacktent-boot-doctor-${timestamp}.json`;
+        const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
       }
 
       function getAutoRunSetting() {
@@ -203,8 +238,11 @@
         applyAutoRunSetting(event.target.checked);
       });
 
+      exportButton.addEventListener("click", exportLastResult);
+
       applyAutoRunSetting(getAutoRunSetting());
       loadLastResult();
+      updateExportAvailability();
       maybeAutoRun();
     </script>
   </body>
