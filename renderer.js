@@ -268,6 +268,23 @@ autoRunCheckbox.addEventListener("change", (event) => {
   if (event.target.checked) maybeAutoRun();
 });
 
+// Redaction placeholder hooks (disabled until wired)
+const selectFileButton = document.getElementById("select-file");
+const runRedactionButton = document.getElementById("run-redaction");
+const redactionPreview = document.getElementById("redaction-preview");
+
+if (selectFileButton) {
+  selectFileButton.addEventListener("click", () => {
+    redactionPreview.textContent = "File picker coming soon.";
+  });
+}
+
+if (runRedactionButton) {
+  runRedactionButton.addEventListener("click", () => {
+    redactionPreview.textContent = "Redaction logic pending.";
+  });
+}
+
 // Init
 applyAutoRunSetting(getAutoRunSetting());
 loadLastResult();

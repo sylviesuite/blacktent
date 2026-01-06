@@ -46,6 +46,40 @@
 
       <div id="checks"></div>
       <div id="suggested" style="margin-top:0.5rem"></div>
+
+      <section
+        style="
+          margin-top:2rem;
+          padding:1rem;
+          border:1px solid #e2e8f0;
+          border-radius:10px;
+          background:#fff;
+        "
+      >
+        <h2 style="margin:0 0 0.5rem; font-size:1.2rem;">Redaction Engine</h2>
+        <p style="margin:0 0 0.7rem; color:#475569;">Select a file and preview before running a redaction.</p>
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+          <button id="select-file" disabled>Select File for Redaction</button>
+          <button id="run-redaction" disabled>Run Redaction</button>
+        </div>
+        <div
+          id="redaction-preview"
+          style="
+            margin-top:0.75rem;
+            padding:0.75rem;
+            border:1px dashed #cbd5f5;
+            border-radius:6px;
+            min-height:120px;
+            font-family:Menlo, Consolas, monospace;
+            background:#f8fafc;
+            color:#475569;
+            white-space:pre-wrap;
+            overflow:auto;
+          "
+        >
+          No file selected yet.
+        </div>
+      </section>
     </main>
 
     <script src="./renderer.js"></script>
