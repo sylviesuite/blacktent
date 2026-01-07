@@ -7,6 +7,9 @@ const statusEl = document.getElementById("status");
 const lastRunEl = document.getElementById("last-run");
 const checksEl = document.getElementById("checks");
 const suggestedEl = document.getElementById("suggested");
+const selectFileButton = document.getElementById("select-file");
+const runRedactionButton = document.getElementById("run-redaction");
+const redactionPreview = document.getElementById("redaction-preview");
 
 // Config
 const STATUS_COLORS = {
@@ -267,6 +270,18 @@ autoRunCheckbox.addEventListener("change", (event) => {
   applyAutoRunSetting(event.target.checked);
   if (event.target.checked) maybeAutoRun();
 });
+
+if (selectFileButton) {
+  selectFileButton.addEventListener("click", () => {
+    redactionPreview.textContent = "File picker coming soon.";
+  });
+}
+
+if (runRedactionButton) {
+  runRedactionButton.addEventListener("click", () => {
+    redactionPreview.textContent = "Redaction logic pending.";
+  });
+}
 
 // Redaction placeholder hooks (disabled until wired)
 const selectFileButton = document.getElementById("select-file");
