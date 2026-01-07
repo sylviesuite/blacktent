@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const path = require("path");
 const { execFile } = require("child_process");
 const fs = require("fs");
+const fsPromises = require("fs/promises");
 
 function safeJson(obj) {
   try {
@@ -134,6 +135,30 @@ ipcMain.handle("redaction:selectFile", async (_event, ...args) => {
     };
   } catch (err) {
     return { ok: false, error: "Unable to stat selected file." };
+  }
+});
+
+ipcMain.handle("redaction:readFileText", async (_event, filePath, ...args) => {
+  if (args.length > 0) {
+    console.warn("redaction:readFileText invoked with unexpected arguments", args);
+    throw new Error("redaction:readFileText takes only the file path");
+  }
+  if (typeof filePath !== "string" || !path.isAbsolute(filePath)) {
+    return { ok: false, error: "Invalid absolute path provided" };
+  }
+  try {
+    const stats = await fsPromises.stat(filePath);
+    const MAX_SIZE = 2 * 1024 * 1024;
+    if (stats.size > MAX_SIZE) {
+      return { ok: false, error: "File too large for preview" };
+    }
+    const buffer = await fsPromises.readFile(filePath);
+    if (buffer.includes(0)) {
+      return { ok: false, error: "Binary file not supported" };
+    }
+    return { ok: true, text: buffer.toString("utf8") };
+  } catch (err) {
+    return { ok: false, error: "Unable to read file" };
   }
 });
 

@@ -7,6 +7,6 @@ contextBridge.exposeInMainWorld("bootDoctor", {
 
 contextBridge.exposeInMainWorld("redaction", {
   selectFile: () => ipcRenderer.invoke("redaction:selectFile"),
-  readSelectedFile: (filePath) => ipcRenderer.invoke("redaction:readFile", filePath),
+  readFileText: (path) => ipcRenderer.invoke("redaction:readFileText", path),
 });
 

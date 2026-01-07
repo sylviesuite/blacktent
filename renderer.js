@@ -272,8 +272,25 @@ autoRunCheckbox.addEventListener("change", (event) => {
 });
 
 if (selectFileButton) {
-  selectFileButton.addEventListener("click", () => {
-    redactionPreview.textContent = "File picker coming soon.";
+  selectFileButton.addEventListener("click", async () => {
+    setStatus("Selecting file...", null);
+    const result = await window.redaction.selectFile();
+    if (!result.ok) {
+      redactionPreview.textContent = result.error || "File selection cancelled.";
+      runRedactionButton.disabled = true;
+      return;
+    }
+    const read = await window.redaction.readFileText(result.path);
+    if (!read.ok) {
+      redactionPreview.textContent = read.error;
+      runRedactionButton.disabled = true;
+      return;
+    }
+    const preview = read.text.slice(0, 4000);
+    const truncated = read.text.length > 4000 ? "\n...(truncated)" : "";
+    redactionPreview.textContent = `Selected: ${result.name} (${result.path})\n\n${preview}${truncated}`;
+    runRedactionButton.disabled = true;
+    setStatus("File ready for redaction.", "ok");
   });
 }
 
