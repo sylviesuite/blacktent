@@ -10,6 +10,7 @@ const suggestedEl = document.getElementById("suggested");
 const selectFileButton = document.getElementById("select-file");
 const runRedactionButton = document.getElementById("run-redaction");
 const redactionPreview = document.getElementById("redaction-preview");
+const confirmPreviewButton = document.getElementById("confirm-preview");
 
 // Config
 const STATUS_COLORS = {
@@ -35,6 +36,8 @@ let copyTimer = null;
 let resultStatusText = "Status pending.";
 let autoRunTriggered = false;
 let lastResult = null;
+let previewStatus = null;
+let previewConfirmed = false;
 
 // Helpers
 function setStatus(text, level) {
@@ -50,6 +53,17 @@ function resetView() {
 
 function updateExportAvailability() {
   exportButton.disabled = !lastResult;
+}
+
+function updateConfirmationState(show) {
+  previewConfirmed = false;
+  if (confirmPreviewButton) {
+    confirmPreviewButton.style.display = show ? "inline-block" : "none";
+  }
+  if (!show) {
+    previewStatus = null;
+  }
+  runRedactionButton.disabled = true;
 }
 
 function renderChecks(checks) {
@@ -165,6 +179,7 @@ function loadLastResult() {
     setStatus(resultStatusText, null);
     lastResult = null;
     updateExportAvailability();
+    updateConfirmationState(false);
     return null;
   }
 
@@ -189,6 +204,7 @@ function loadLastResult() {
   setStatus(resultStatusText, lastResult.status);
 
   updateExportAvailability();
+    updateConfirmationState(false);
   return lastResult;
 }
 
@@ -278,25 +294,51 @@ if (selectFileButton) {
     if (!result.ok) {
       redactionPreview.textContent = result.error || "File selection cancelled.";
       runRedactionButton.disabled = true;
+      updateConfirmationState(false);
       return;
     }
     const read = await window.redaction.readFileText(result.path);
     if (!read.ok) {
       redactionPreview.textContent = read.error;
       runRedactionButton.disabled = true;
+      updateConfirmationState(false);
+      if (read.error?.includes("large")) {
+        setStatus("File too large (>2MB). Please select a smaller text file.", "warning");
+        console.debug("redaction:file-size-rejected", result.path);
+      } else if (read.error?.includes("Binary")) {
+        setStatus("Binary file detected. Only UTF-8 text files are supported.", "warning");
+        console.debug("redaction:binary-rejected", result.path);
+      } else {
+        setStatus(read.error, null);
+        console.error("redaction:read-error", read.error);
+      }
       return;
     }
     const preview = read.text.slice(0, 4000);
     const truncated = read.text.length > 4000 ? "\n...(truncated)" : "";
     redactionPreview.textContent = `Selected: ${result.name} (${result.path})\n\n${preview}${truncated}`;
     runRedactionButton.disabled = true;
-    setStatus("File ready for redaction.", "ok");
+    previewStatus = "success";
+    updateConfirmationState(true);
+    setStatus("Preview loaded (showing first 4,000 characters)", "ok");
+    console.debug("redaction:preview-success", result.path);
   });
 }
 
 if (runRedactionButton) {
   runRedactionButton.addEventListener("click", () => {
     redactionPreview.textContent = "Redaction logic pending.";
+  });
+}
+
+if (confirmPreviewButton) {
+  confirmPreviewButton.addEventListener("click", () => {
+    if (previewStatus !== "success") {
+      return;
+    }
+    previewConfirmed = true;
+    runRedactionButton.disabled = false;
+    setStatus("Preview confirmed; redaction can run next.", "ok");
   });
 }
 
