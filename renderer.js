@@ -11,6 +11,11 @@ const selectFileButton = document.getElementById("select-file");
 const runRedactionButton = document.getElementById("run-redaction");
 const redactionPreview = document.getElementById("redaction-preview");
 const confirmPreviewButton = document.getElementById("confirm-preview");
+const dryRunPlanSection = document.getElementById("dry-run-plan");
+const dryRunStatusEl = document.getElementById("dry-run-status");
+const dryRunCountsEl = document.getElementById("dry-run-counts");
+const dryRunRiskEl = document.getElementById("dry-run-risk");
+const dryRunSamplesEl = document.getElementById("dry-run-samples");
 
 // Config
 const STATUS_COLORS = {
@@ -38,6 +43,9 @@ let autoRunTriggered = false;
 let lastResult = null;
 let previewStatus = null;
 let previewConfirmed = false;
+let selectedFileMeta = null;
+let currentPreviewText = "";
+let redactionPlan = null;
 
 // Helpers
 function setStatus(text, level) {
@@ -51,8 +59,222 @@ function resetView() {
   suggestedEl.innerHTML = "";
 }
 
+function clearRedactionPlan() {
+  redactionPlan = null;
+  currentPreviewText = "";
+  selectedFileMeta = null;
+  if (dryRunPlanSection) {
+    dryRunPlanSection.style.display = "none";
+  }
+  if (dryRunStatusEl) {
+    dryRunStatusEl.textContent = "Run the dry-run to see potential matches.";
+  }
+  if (dryRunCountsEl) {
+    dryRunCountsEl.innerHTML = "";
+  }
+  if (dryRunRiskEl) {
+    dryRunRiskEl.textContent = "";
+  }
+  if (dryRunSamplesEl) {
+    dryRunSamplesEl.innerHTML = "";
+  }
+  updateExportAvailability();
+}
+
+const EMAIL_REGEX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/gi;
+const PHONE_REGEX =
+  /(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{2,4}\)?[-.\s]?){1,3}\d{3,4}/g;
+const URL_REGEX = /\b(?:https?:\/\/|www\.)[^\s]+/gi;
+const API_KEY_REGEX = /\b[A-Za-z0-9_-]{24,}\b/g;
+
+function collectMatches(text, pattern) {
+  let flags = pattern.flags || "";
+  if (!flags.includes("g")) {
+    flags += "g";
+  }
+  const regex = new RegExp(pattern.source, flags);
+  const matches = [];
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    matches.push(match[0]);
+  }
+  return matches;
+}
+
+function uniqueSamples(values, limit = 3) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    if (result.length >= limit) break;
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function collectApiKeyMatches(text) {
+  const tokens = collectMatches(text, API_KEY_REGEX);
+  const lines = text.split(/\r?\n/);
+  const keywordRegex = /\b(?:key|token|secret|api_key|bearer)\b/i;
+  const keywordMatches = [];
+  for (const line of lines) {
+    if (keywordRegex.test(line)) {
+      const trimmed = line.trim();
+      if (trimmed) {
+        keywordMatches.push(trimmed);
+      }
+    }
+  }
+  return tokens.concat(keywordMatches);
+}
+
+function formatBytes(bytes) {
+  if (bytes == null) return "size unknown";
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+function buildRedactionPlan(text) {
+  const emails = collectMatches(text, EMAIL_REGEX);
+  const phones = collectMatches(text, PHONE_REGEX);
+  const urls = collectMatches(text, URL_REGEX);
+  const apiKeys = collectApiKeyMatches(text);
+  const counts = {
+    emails: emails.length,
+    phones: phones.length,
+    urls: urls.length,
+    apiKeys: apiKeys.length,
+  };
+  counts.total =
+    counts.emails + counts.phones + counts.urls + counts.apiKeys;
+  const samples = {
+    emails: uniqueSamples(emails),
+    phones: uniqueSamples(phones),
+    urls: uniqueSamples(urls),
+    apiKeys: uniqueSamples(apiKeys),
+  };
+  const flags = [];
+  if (counts.apiKeys > 0) flags.push("POSSIBLE_PRIVATE_KEY");
+  if (counts.emails > 5) flags.push("MANY_EMAILS");
+  if (counts.phones > 3) flags.push("MANY_PHONE_NUMBERS");
+  if (counts.urls > 5) flags.push("MANY_URLS");
+  if (counts.total > 30) flags.push("HIGH_SENSITIVITY");
+  if (counts.total === 0) flags.push("NO_DETECTIONS");
+  return {
+    createdAt: new Date().toISOString(),
+    source: {
+      name: selectedFileMeta?.name || "Selected file",
+      sizeBytes: selectedFileMeta?.sizeBytes ?? null,
+    },
+    counts,
+    samples,
+    riskFlags: flags,
+  };
+}
+
+function renderDryRunPlan(plan) {
+  if (!dryRunPlanSection) return;
+  if (!plan) {
+    dryRunPlanSection.style.display = "none";
+    if (dryRunStatusEl) {
+      dryRunStatusEl.textContent = "Run the dry-run to see potential matches.";
+    }
+    if (dryRunCountsEl) {
+      dryRunCountsEl.innerHTML = "";
+    }
+    if (dryRunRiskEl) {
+      dryRunRiskEl.textContent = "";
+    }
+    if (dryRunSamplesEl) {
+      dryRunSamplesEl.innerHTML = "";
+    }
+    return;
+  }
+  dryRunPlanSection.style.display = "block";
+  if (dryRunStatusEl) {
+    const sizeLabel = formatBytes(plan.source.sizeBytes);
+    dryRunStatusEl.textContent = `Plan generated from ${plan.source.name} (${sizeLabel}) at ${new Date(
+      plan.createdAt
+    ).toLocaleString()}.`;
+  }
+  if (dryRunCountsEl) {
+    dryRunCountsEl.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    const entries = [
+      ["emails", "Emails"],
+      ["phones", "Phone numbers"],
+      ["urls", "URLs"],
+      ["apiKeys", "API keys/secrets"],
+      ["total", "Total matches"],
+    ];
+    entries.forEach(([key, label]) => {
+      const value = plan.counts[key] ?? 0;
+      const badge = document.createElement("div");
+      badge.style.padding = "0.4rem 0.6rem";
+      badge.style.border = "1px solid #cbd5f5";
+      badge.style.borderRadius = "6px";
+      badge.style.background = "#fff";
+      badge.style.minWidth = "140px";
+      badge.style.fontSize = "0.85rem";
+      badge.style.lineHeight = "1.3";
+      const strong = document.createElement("strong");
+      strong.style.display = "block";
+      strong.textContent = label;
+      const valueSpan = document.createElement("span");
+      valueSpan.textContent = value.toString();
+      badge.appendChild(strong);
+      badge.appendChild(valueSpan);
+      fragment.appendChild(badge);
+    });
+    dryRunCountsEl.appendChild(fragment);
+  }
+  if (dryRunRiskEl) {
+    dryRunRiskEl.textContent =
+      plan.riskFlags.length > 0
+        ? `Risk flags: ${plan.riskFlags.join(", ")}`
+        : "Risk flags: none detected.";
+  }
+  if (dryRunSamplesEl) {
+    dryRunSamplesEl.innerHTML = "";
+    const sampleLabels = {
+      emails: "Emails",
+      phones: "Phone numbers",
+      urls: "URLs",
+      apiKeys: "API keys/secrets",
+    };
+    Object.entries(plan.samples).forEach(([key, values]) => {
+      const section = document.createElement("div");
+      section.style.marginTop = "0.6rem";
+      const title = document.createElement("strong");
+      title.textContent = `${sampleLabels[key] || key} samples (${values.length})`;
+      section.appendChild(title);
+      if (values.length === 0) {
+        const empty = document.createElement("div");
+        empty.style.color = "#475569";
+        empty.style.fontSize = "0.85rem";
+        empty.textContent = "None detected.";
+        section.appendChild(empty);
+      } else {
+        const list = document.createElement("ul");
+        list.style.margin = "0.2rem 0 0";
+        list.style.paddingLeft = "1.1rem";
+        list.style.color = "#0f172a";
+        list.style.fontSize = "0.85rem";
+        values.forEach((value) => {
+          const item = document.createElement("li");
+          item.textContent = value;
+          list.appendChild(item);
+        });
+        section.appendChild(list);
+      }
+      dryRunSamplesEl.appendChild(section);
+    });
+  }
+}
+
 function updateExportAvailability() {
-  exportButton.disabled = !lastResult;
+  exportButton.disabled = !redactionPlan;
 }
 
 function updateConfirmationState(show) {
@@ -62,6 +284,7 @@ function updateConfirmationState(show) {
   }
   if (!show) {
     previewStatus = null;
+    clearRedactionPlan();
   }
   runRedactionButton.disabled = true;
 }
@@ -339,23 +562,6 @@ if (confirmPreviewButton) {
     previewConfirmed = true;
     runRedactionButton.disabled = false;
     setStatus("Preview confirmed; redaction can run next.", "ok");
-  });
-}
-
-// Redaction placeholder hooks (disabled until wired)
-const selectFileButton = document.getElementById("select-file");
-const runRedactionButton = document.getElementById("run-redaction");
-const redactionPreview = document.getElementById("redaction-preview");
-
-if (selectFileButton) {
-  selectFileButton.addEventListener("click", () => {
-    redactionPreview.textContent = "File picker coming soon.";
-  });
-}
-
-if (runRedactionButton) {
-  runRedactionButton.addEventListener("click", () => {
-    redactionPreview.textContent = "Redaction logic pending.";
   });
 }
 
