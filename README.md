@@ -119,3 +119,82 @@ BlackTent v1.0 is feature-locked around:
 - Mechanic Mode (suggest, don’t auto-fix)
 
 Future work will expand clarity, not automation.
+
+---
+
+## Stateless Incident Response
+
+BlackTent is built around a **Stateless Incident Response** security model.
+
+When something breaks, the most common risks are not attackers, but panic, overreach, and accidental disclosure. BlackTent is designed to reduce those risks by controlling how investigation happens, not by storing more data.
+
+### What “stateless” means
+
+BlackTent does **not**:
+
+* remember repository contents, environment state, or system history
+
+* retain logs, snapshots, or diagnostic context between runs
+
+* upload or persist any data internally
+
+* build long-term memory of incidents or projects
+
+Each run is **local, ephemeral, and self-contained**.
+
+When BlackTent exits, it forgets everything it observed.
+
+This is intentional.
+
+### How incident response works without memory
+
+During an incident, BlackTent focuses on **preservation through non-action**:
+
+* **Read-only diagnostics**
+
+  BlackTent observes without fixing, rewriting, or normalizing system state.
+
+* **Intentional evidence capture**
+
+  When explicitly requested, BlackTent can generate sanitized reports, redacted bundles, and safe summaries for escalation. These artifacts never include secret values and are created only through user intent.
+
+* **Safe external escalation**
+
+  Sanitized output can be shared with AI tools, consultants, or teammates without exposing sensitive data.
+
+* **Forensic preservation**
+
+  Because BlackTent does not modify the system or retain hidden state, the original context remains intact for internal investigation, postmortems, and audits.
+
+The artifact persists.
+
+The human decides.
+
+The tool forgets.
+
+### Why this matters
+
+Most debugging and AI-assisted tools optimize for speed and automation. In high-stress situations, that often leads to evidence destruction, uncontrolled changes, accidental leaks, and unclear postmortems.
+
+BlackTent optimizes for **trust under pressure**.
+
+By remaining stateless, it minimizes attack surface, simplifies security review, and makes it safe to use during the moments when mistakes are most likely.
+
+Stateless Incident Response is not about doing more.
+
+It is about **not making things worse**, while still enabling help.
+
+---
+
+## CLI (v1)
+
+BlackTent exposes a calm, read-only CLI surface for the scoped v1 release. The commands below are placeholder-first and intentionally avoid secrets, automation, or repo-wide mutations.
+
+Example commands:
+
+- `python -m blacktent doctor --scope minimal --category boot`  
+- `python -m blacktent env check --strict --print-keys`  
+- `python -m blacktent scan --include "*.env*" --report blacktent-scan.json`  
+- `python -m blacktent redact bundle --dry-run --policy default`
+
+Use `--json` for machine-friendly output and add `--report` or `--out` when you explicitly want sanitized artifacts written to disk.
