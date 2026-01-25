@@ -18,7 +18,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Optional .gitignore support
 try:
@@ -45,6 +45,7 @@ RULES: List[Rule] = [
 ]
 
 ENV_FILES = [".env", ".env.local", ".env.production", ".env.example"]
+NAMESPACES = ("system", "runtime", "project", "logs")
 
 def _sha8(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8", errors="ignore")).hexdigest()[:8]
@@ -132,22 +133,30 @@ def manifest_path(root: Path) -> Path:
     return blacktent_dir(root) / "manifest.json"
 
 
-def write_manifest(root: Path, entries: List[Dict]) -> Path:
+def _entry_id(out_path: Path) -> str:
+    digest = hashlib.sha256(str(out_path).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def _manifest_entry(out_path: Path, findings: List[Finding], base_root: Path, namespace: str) -> Dict[str, Any]:
+    return {
+        "id": _entry_id(out_path),
+        "namespace": namespace,
+        "path": str(out_path.relative_to(base_root)),
+        "finding_count": len(findings),
+        "rules": sorted({f.rule for f in findings}),
+    }
+
+
+def write_manifest(root: Path, contents: Dict[str, List[Dict[str, Any]]]) -> Path:
     mp = manifest_path(root)
     payload = {
         "version": "0.1",
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "entries": entries,
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "contents": {ns: contents.get(ns, []) for ns in NAMESPACES},
     }
     mp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return mp
-
-
-def load_manifest(root: Path) -> Dict:
-    mp = manifest_path(root)
-    if not mp.exists():
-        raise FileNotFoundError(f"Manifest not found: {mp}")
-    return json.loads(mp.read_text(encoding="utf-8"))
 
 
 # -----------------------------
@@ -229,24 +238,9 @@ def scan_file_cmd(repo_root: Path, input_path: Path, out_path: Optional[Path]) -
     out_path = out_path.resolve()
     out_path.write_text(redacted, encoding="utf-8")
 
-    entry = {
-        "type": "file",
-        "input": str(input_path),
-        "output": str(out_path),
-        "findings": [
-            {
-                "rule": f.rule,
-                "start": f.start,
-                "end": f.end,
-                "replacement": f.replacement,
-                "match_len": f.match_len,
-                "match_sha256": f.match_sha256,
-            }
-            for f in findings
-        ],
-    }
+    entry = _manifest_entry(out_path, findings, base_root=repo_root, namespace="project")
 
-    mp = write_manifest(repo_root, [entry])
+    mp = write_manifest(repo_root, contents={"project": [entry]})
 
     return {
         "input": str(input_path),
@@ -290,25 +284,10 @@ def scan_dir_cmd(repo_root: Path, target_dir: Path, out_dir: Optional[Path]) -> 
         out_path.write_text(redacted, encoding="utf-8")
 
         entries.append(
-            {
-                "type": "file",
-                "input": str(p.resolve()),
-                "output": str(out_path.resolve()),
-                "findings": [
-                    {
-                        "rule": f.rule,
-                        "start": f.start,
-                        "end": f.end,
-                        "replacement": f.replacement,
-                        "match_len": f.match_len,
-                        "match_sha256": f.match_sha256,
-                    }
-                    for f in findings
-                ],
-            }
+            _manifest_entry(out_path, findings, base_root=repo_root, namespace="project")
         )
 
-    mp = write_manifest(repo_root, entries)
+    mp = write_manifest(repo_root, contents={"project": entries})
 
     return {
         "dir": str(target_dir),
@@ -331,8 +310,11 @@ def bundle_cmd(repo_root: Path, target_dir: Path, bundle_root: Optional[Path]) -
     included_files = 0
     total_findings = 0
 
-    files_out_root = bundle_root / "files"
-    files_out_root.mkdir(parents=True, exist_ok=True)
+    namespace_paths = {ns: bundle_root / ns for ns in NAMESPACES}
+    for path in namespace_paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+
+    files_out_root = namespace_paths["project"]
 
     for p in target_dir.rglob("*"):
         if not p.is_file():
@@ -356,36 +338,13 @@ def bundle_cmd(repo_root: Path, target_dir: Path, bundle_root: Optional[Path]) -
         out_path.write_text(redacted, encoding="utf-8")
 
         entries.append(
-            {
-                "type": "file",
-                "input": str(p.resolve()),
-                "output": str(out_path.resolve()),
-                "findings": [
-                    {
-                        "rule": f.rule,
-                        "start": f.start,
-                        "end": f.end,
-                        "replacement": f.replacement,
-                        "match_len": f.match_len,
-                        "match_sha256": f.match_sha256,
-                    }
-                    for f in findings
-                ],
-            }
+            _manifest_entry(out_path, findings, base_root=bundle_root, namespace="project")
         )
 
     # Write manifest into bundle (and also keep a copy in repo .blacktent)
-    mp_repo = write_manifest(repo_root, entries)
+    mp_repo = write_manifest(repo_root, contents={"project": entries})
     mp_bundle = bundle_root / "manifest.json"
     mp_bundle.write_text(Path(mp_repo).read_text(encoding="utf-8"), encoding="utf-8")
-
-    readme = bundle_root / "README_AI.txt"
-    readme.write_text(
-        "BlackTent AI-safe bundle\n\n"
-        "This bundle contains redacted files only.\n"
-        "Use manifest.json to understand what was redacted.\n",
-        encoding="utf-8",
-    )
 
     return {
         "bundle_path": str(bundle_root),

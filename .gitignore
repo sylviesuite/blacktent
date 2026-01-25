@@ -101,50 +101,9 @@ dist
 # vitepress build output
 **/.vitepress/dist
 
-# vitepress cache directory
-**/.vitepress/cache
-
-# Docusaurus cache and generated files
-.docusaurus
-
-# Serverless directories
-.serverless/
-
-# FuseBox cache
-.fusebox/
-
-# DynamoDB Local files
-.dynamodb/
-
-# Firebase cache directory
-.firebase/
-
-# TernJS port file
-.tern-port
-
-# Stores VSCode versions used for testing VSCode extensions
-.vscode-test
-
-# yarn v3
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/sdks
-!.yarn/versions
-
 # Vite logs files
 vite.config.js.timestamp-*
-vite.config.ts.timestamp-*# BlackTent local runtime & artifacts
-.blacktent/
-blacktent.bundle/
-blacktent/__pycache__/
-__pycache__/
-*.redacted
-*.redact
-session.json
-tatus
+vite.config.ts.timestamp-*
 
 # BlackTent local runtime & artifacts
 .blacktent/
@@ -154,7 +113,6 @@ __pycache__/
 *.redacted
 *.redact
 session.json
-tatus
 
 # Local scratch files
 nul

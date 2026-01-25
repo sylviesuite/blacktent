@@ -4,36 +4,29 @@ import hashlib
 import json
 import re
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import Dict, List, Any, Tuple
 
 
 BUNDLE_DEFAULT_ROOT = Path("blacktent.bundle")
-FILES_SUBDIR = "files"
 MANIFEST_NAME = "manifest.json"
+NAMESPACES = ("system", "runtime", "project", "logs")
 
 
 @dataclass
 class RedactionRecord:
     """Single redaction operation applied to the file."""
 
-    kind: str          # e.g. "email", "token"
-    original: str      # the original string we redacted
-    replacement: str   # what we replaced it with
-    start: int         # start index in original text
-    end: int           # end index in original text
+    kind: str
+    original: str
+    replacement: str
+    start: int
+    end: int
 
 
 def _detect_redactions(text: str) -> List[RedactionRecord]:
-    """
-    Very simple, transparent secret detector.
-
-    This is intentionally conservative and explainable.
-    Later you can plug in a more advanced engine, but
-    the manifest format should stay stable.
-    """
     patterns: List[Tuple[str, re.Pattern[str]]] = [
         (
             "email",
@@ -68,15 +61,11 @@ def _detect_redactions(text: str) -> List[RedactionRecord]:
                 )
             )
 
-    # Sort by start index so we can apply deterministically
     redactions.sort(key=lambda r: r.start)
     return redactions
 
 
 def _apply_redactions(text: str, redactions: List[RedactionRecord]) -> str:
-    """
-    Apply redactions to the text, preserving non-redacted content.
-    """
     if not redactions:
         return text
 
@@ -84,15 +73,11 @@ def _apply_redactions(text: str, redactions: List[RedactionRecord]) -> str:
     cursor = 0
 
     for r in redactions:
-        # Add text before this redaction
         if r.start > cursor:
             out_parts.append(text[cursor : r.start])
-
-        # Add replacement
         out_parts.append(r.replacement)
         cursor = r.end
 
-    # Tail
     if cursor < len(text):
         out_parts.append(text[cursor:])
 
@@ -107,63 +92,77 @@ def _sha256_of_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _default_manifest() -> Dict[str, Any]:
+    created = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return {
+        "version": 1,
+        "created_at": created,
+        "contents": {ns: [] for ns in NAMESPACES},
+    }
+
+
 def _load_manifest(manifest_path: Path) -> Dict[str, Any]:
     if not manifest_path.exists():
-        created = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        return {"version": 1, "created_at": created, "files": []}
+        return _default_manifest()
 
     try:
-        with manifest_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception:
-        # If it's corrupted, start fresh but keep the old file around
         backup = manifest_path.with_suffix(".corrupt.json")
         manifest_path.rename(backup)
-        created = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        return {"version": 1, "created_at": created, "files": []}
+        return _default_manifest()
+
+    contents = manifest.get("contents", {})
+    for ns in NAMESPACES:
+        contents.setdefault(ns, [])
+    manifest["contents"] = contents
+    return manifest
 
 
 def scan_and_bundle(
     source_path: Path,
     bundle_root: Path | None = None,
 ) -> Dict[str, Any]:
-    """
-    Scan `source_path` for secrets, write a redacted copy into bundle_root,
-    and update the manifest.
-
-    Returns a small summary dict with IDs and paths.
-    """
     if bundle_root is None:
         bundle_root = BUNDLE_DEFAULT_ROOT
 
     bundle_root = bundle_root.expanduser().resolve()
-    files_dir = bundle_root / FILES_SUBDIR
     manifest_path = bundle_root / MANIFEST_NAME
+    namespace_paths = {ns: bundle_root / ns for ns in NAMESPACES}
 
     bundle_root.mkdir(exist_ok=True)
-    files_dir.mkdir(exist_ok=True)
+    for path in namespace_paths.values():
+        path.mkdir(exist_ok=True)
 
     text = source_path.read_text(encoding="utf-8", errors="replace")
     redactions = _detect_redactions(text)
     redacted_text = _apply_redactions(text, redactions)
     file_id = uuid.uuid4().hex
 
-    # Write redacted file
     redacted_filename = f"{file_id}.txt.redacted"
-    redacted_path = files_dir / redacted_filename
+    redacted_path = namespace_paths["project"] / redacted_filename
     redacted_path.write_text(redacted_text, encoding="utf-8")
 
-    # Update manifest
     manifest = _load_manifest(manifest_path)
-    file_entry = {
+    entry = {
         "id": file_id,
-        "source_path": str(source_path.resolve()),
-        "redacted_path": str(redacted_path),
+        "namespace": "project",
+        "path": str(redacted_path.relative_to(bundle_root)),
+        "source_name": source_path.name,
         "sha256_original": _sha256_of_file(source_path),
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "redactions": [asdict(r) for r in redactions],
+        "redaction_count": len(redactions),
+        "redactions": [
+            {
+                "kind": r.kind,
+                "replacement": r.replacement,
+                "start": r.start,
+                "end": r.end,
+            }
+            for r in redactions
+        ],
     }
-    manifest.setdefault("files", []).append(file_entry)
+    manifest["contents"].setdefault("project", []).append(entry)
 
     with manifest_path.open("w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
@@ -174,3 +173,4 @@ def scan_and_bundle(
         "redacted_path": str(redacted_path),
         "num_redactions": len(redactions),
     }
+
