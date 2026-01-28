@@ -1,200 +1,79 @@
-# blacktent
-Local-first AI development sandbox that protects secrets, sanitizes project files, and allows safe AI-assisted coding. MVP includes secret scanning, redaction mapping, sanitized filesystem, patch engine, and AI gateway.
+# BlackTent — A strictly local CLI for generating policy-constrained bundles intended for external sharing with LLMs or vendors
 
-## Why BlackTent Exists
+BlackTent is a local, non-networked CLI that prepares sanitized incident context for sharing. It never reaches outside the host, it does not execute an LLM, and its only purpose is to capture, sanitize, and package data for safe external review.
 
-Modern AI tools are powerful, but unsafe by default.
+BlackTent applies an explicit, reviewable policy (paths, file types, and redaction rules) defined in config, so organizations can agree in advance on what is allowed to leave during incidents.
 
-They:
+## What BlackTent is
 
-- encourage copying secrets into chat windows  
-- execute commands too eagerly  
-- refactor large surfaces without context  
-- blur the line between thinking and acting  
+- A strictly local command-line program with no network connectivity or hidden services.
+- A toolkit for capturing incident data, redacting high-risk fields, and producing exportable bundles.
+- A preparer of context intended for human reviewers, LLMs, or vendors once the outputs are explicitly exported.
 
-BlackTent exists to restore control, safety, and intent to AI-assisted development.
+## What BlackTent is not
 
----
+- Not an AI model, inference engine, or agent.
+- Not a sandboxed runtime or container orchestrator.
+- Not a replacement for a full incident response pipeline or managed service.
+- Not automated remediation; it does not decide on actions for you.
 
-## What BlackTent Is
+## Problem statement
 
-BlackTent is a security-first development tent for working through fragile or high-risk problems without exposing secrets, damaging state, or spiraling into unintended changes.
+Incidents happen under stress. Teams often respond by dumping sensitive files into chats or tools without understanding what leaks to the outside. Accidentally exposing credentials or internal state to LLMs or vendors is a real harm. BlackTent exists to reduce that harm by making evidence curation intentional, auditable, and repeatable, not by pretending to eliminate risk entirely.
 
-It is designed for moments when:
+## Threat model (v0)
 
-- your environment is unstable  
-- configuration feels haunted  
-- secrets are involved (.env, credentials, tokens)  
-- you need diagnosis, not automation  
+- Reduces risk of leaking secrets, credentials, or broken defaults when sharing incident context externally.
+- Reduces risk of undocumented transformations by requiring deterministic sanitization steps.
+- Does not prevent attackers from accessing the machine directly.
+- Does not replace hardened infrastructure or ongoing detection tooling.
+- Does not handle insider threats, lateral movement, or persistence that occurs outside the bundle generation window.
+- Does not make exports safe against malicious downstream recipients; downstream vendors and LLM providers must still be vetted.
 
-BlackTent favors clarity over speed and containment over cleverness.
+## Statelessness contract
 
----
+- No network access at any point during bundle creation.
+- No telemetry, no phoning home, no hidden endpoints.
+- One-shot execution: run once, produce a bundle, exit.
+- No hidden persistence: temporary artifacts live only in the working directory unless explicitly exported.
+- Explicit export only: data leaves the machine only when the user runs `blacktent bundle --export ...`.
+- Deterministic output target so repeated runs with the same inputs and flags yield the same bundle tree.
 
-## Core Principles
+## How it works
 
-### No Silent Execution
+1. The operator points BlackTent at the incident scope (directories, files, logs).
+2. BlackTent scans the specified inputs, records metadata, and applies sanitization policies.
+3. Sanitized files and indicators are written into a dedicated bundle directory.
+4. The manifest describes every file, what was redacted, and what policies were applied.
+5. The bundle is exported only when the operator explicitly copies or ships it to reviewers.
 
-BlackTent never:
+## Bundle format (v0)
 
-- runs commands without explicit consent  
-- kills processes automatically  
-- mutates files invisibly  
+- A top-level directory such as `bundle-<timestamp>/`.
+- A `manifest.json` file that lists every included artifact, its source path, sanitization status, and a hash for integrity checks.
+- Subdirectories for logs, configuration, and diagnostics, each documenting redaction status in accompanying metadata files.
+- No default modification outside the bundle directory.
 
-All actions are explain-first, opt-in, and reversible.
+## Redaction approach (v0)
 
----
+- Bias toward over-redaction: better to omit than to guess accuracy of sensitive values.
+- Logs and high-risk files are opt-in; nothing is redacted unless the operator names it explicitly.
+- Redactions are marked in manifests and within files with consistent placeholders so reviewers know what was removed.
+- When a value cannot be safely retained, a descriptive comment explains why it was omitted.
 
-### Security by Design
+## Minimal CLI surface (v0)
 
-BlackTent treats secrets as opaque:
+- `blacktent bundle [path] --export <destination>` – create and export a sanitized incident bundle.
+- `blacktent inspect manifest.json` – review the manifest before sharing.
+- `blacktent verify <bundle>` – confirm hashes and consistently applied redactions.
+- CLI flags control policy strictness, log inclusion, and what sources to capture; nothing runs without explicit options.
 
-- values are never read or logged
-- structure and presence are analyzed instead
-- .env files can be reasoned about without exposure
+## Why not tar/grep/Docker?
 
-This allows safe debugging of authentication, config drift, and deployment issues.
+Traditional tools like `tar` or `grep` are powerful but not repeatable under stress, and they offer no audit trail for what gets exposed. Docker adds complexity and hidden layers. BlackTent enforces deterministic sanitization, generates a manifest for every export, and keeps the UI simple so that under pressure the operator knows exactly what is being captured and why.
 
----
+## Status & feedback
 
-### Think Before Fix
+Status: planning v0.2.  
+Feedback: open issues and README comments welcome; flag anything that feels unclear or too permissive.
 
-BlackTent separates:
-
-- Diagnosis from Repair
-- Suggestion from Execution
-
-Mechanic Mode can suggest fixes, but will not auto-apply them unless explicitly requested.
-
----
-
-## What BlackTent Protects
-
-- Environment variables and credentials  
-- Fragile dev server state  
-- Configuration assumptions vs reality  
-- Developers under stress or fatigue  
-
-BlackTent is designed to reduce panic-driven damage.
-
----
-
-## What BlackTent Does Not Do
-
-- It does not act as a full autonomous agent  
-- It does not refactor entire repositories  
-- It does not replace developer judgment  
-
-BlackTent is a stability tool, not an automation engine.
-
----
-
-## Intended Use
-
-BlackTent shines in:
-
-- environment drift debugging  
-- dev server confusion (Boot Doctor)  
-- security-sensitive work  
-- pre-release hardening (core lock)  
-
-It is intentionally conservative by design.
-
----
-
-## Philosophy
-
-> "Fast tools break things. Safe tools help you stop."
-
-BlackTent is built for moments when stopping is the most valuable action.
-
----
-
-## Status
-
-BlackTent v1.0 is feature-locked around:
-
-- Boot Doctor  
-- Security Tent (env + redaction safety)  
-- Mechanic Mode (suggest, don’t auto-fix)
-
-Future work will expand clarity, not automation.
-
----
-
-## Stateless Incident Response
-
-BlackTent is built around a **Stateless Incident Response** security model.
-
-When something breaks, the most common risks are not attackers, but panic, overreach, and accidental disclosure. BlackTent is designed to reduce those risks by controlling how investigation happens, not by storing more data.
-
-### What “stateless” means
-
-BlackTent does **not**:
-
-* remember repository contents, environment state, or system history
-
-* retain logs, snapshots, or diagnostic context between runs
-
-* upload or persist any data internally
-
-* build long-term memory of incidents or projects
-
-Each run is **local, ephemeral, and self-contained**.
-
-When BlackTent exits, it forgets everything it observed.
-
-This is intentional.
-
-### How incident response works without memory
-
-During an incident, BlackTent focuses on **preservation through non-action**:
-
-* **Read-only diagnostics**
-
-  BlackTent observes without fixing, rewriting, or normalizing system state.
-
-* **Intentional evidence capture**
-
-  When explicitly requested, BlackTent can generate sanitized reports, redacted bundles, and safe summaries for escalation. These artifacts never include secret values and are created only through user intent.
-
-* **Safe external escalation**
-
-  Sanitized output can be shared with AI tools, consultants, or teammates without exposing sensitive data.
-
-* **Forensic preservation**
-
-  Because BlackTent does not modify the system or retain hidden state, the original context remains intact for internal investigation, postmortems, and audits.
-
-The artifact persists.
-
-The human decides.
-
-The tool forgets.
-
-### Why this matters
-
-Most debugging and AI-assisted tools optimize for speed and automation. In high-stress situations, that often leads to evidence destruction, uncontrolled changes, accidental leaks, and unclear postmortems.
-
-BlackTent optimizes for **trust under pressure**.
-
-By remaining stateless, it minimizes attack surface, simplifies security review, and makes it safe to use during the moments when mistakes are most likely.
-
-Stateless Incident Response is not about doing more.
-
-It is about **not making things worse**, while still enabling help.
-
----
-
-## CLI (v1)
-
-BlackTent exposes a calm, read-only CLI surface for the scoped v1 release. The commands below are placeholder-first and intentionally avoid secrets, automation, or repo-wide mutations.
-
-Example commands:
-
-- `python -m blacktent doctor --scope minimal --category boot`  
-- `python -m blacktent env check --strict --print-keys`  
-- `python -m blacktent scan --include "*.env*" --report blacktent-scan.json`  
-- `python -m blacktent redact bundle --dry-run --policy default`
-
-Use `--json` for machine-friendly output and add `--report` or `--out` when you explicitly want sanitized artifacts written to disk.
