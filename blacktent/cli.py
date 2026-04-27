@@ -27,6 +27,14 @@ try:
 except ImportError:
     scan_and_bundle = None  # type: ignore
 
+from .verify import generate_secret, run_checks
+
+
+def _color(text: str, code: str) -> str:
+    if sys.stdout.isatty():
+        return f"\033[{code}m{text}\033[0m"
+    return text
+
 
 # ----------------------------
 # Exit codes (v1 contract)
@@ -586,6 +594,49 @@ def cmd_health(_args: argparse.Namespace) -> int:
     return EXIT_OK if report.state == HealthState.HEALTHY else EXIT_INTERNAL_ERROR
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    env_path = Path(args.env_file)
+    if not env_path.exists():
+        print(f"Env file not found: {env_path}", file=sys.stderr)
+        return EXIT_USER_FIXABLE
+
+    env_map, _ = parse_env_file(env_path)
+    results = run_checks(env_map)
+
+    def symbol(status: str) -> str:
+        if status == "pass":
+            return _color("✓", "32")
+        if status == "fail":
+            return _color("✗", "31")
+        return _color("–", "2")
+
+    print()
+    for r in results:
+        print(f"  {symbol(r.status)}  {r.name:<18} {r.reason}")
+        if r.status == "fail" and r.name == "JWT_SECRET":
+            print(f"     Suggested:  JWT_SECRET={generate_secret()}")
+    print()
+
+    passed = sum(1 for r in results if r.status == "pass")
+    failed = sum(1 for r in results if r.status == "fail")
+    skipped = sum(1 for r in results if r.status == "skip")
+
+    parts = [f"{passed} passed"] if passed else []
+    if failed:
+        parts.append(_color(f"{failed} failed", "31"))
+    if skipped:
+        parts.append(f"{skipped} skipped")
+    print("  " + ", ".join(parts))
+    print()
+
+    return EXIT_OK if failed == 0 else EXIT_USER_FIXABLE
+
+
+def cmd_generate_secret(_args: argparse.Namespace) -> int:
+    print(generate_secret())
+    return EXIT_OK
+
+
 # ----------------------------
 # Parser
 # ----------------------------
@@ -648,6 +699,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_health = sub.add_parser("health", help="Run local health checks (runtime-only today).")
     p_health.set_defaults(_handler="health")
 
+    # verify
+    p_verify = sub.add_parser("verify", help="Check .env keys against their services")
+    p_verify.add_argument(
+        "--env",
+        dest="env_file",
+        default=".env",
+        help="Path to .env file (default: .env)",
+    )
+    p_verify.set_defaults(_handler="verify")
+
+    # generate-secret
+    p_gensec = sub.add_parser(
+        "generate-secret",
+        help="Generate a cryptographically secure random secret",
+    )
+    p_gensec.set_defaults(_handler="generate_secret")
+
     # scan (optional)
     p_scan = sub.add_parser("scan", help="(Optional) scan/bundle/redaction helpers")
     p_scan.set_defaults(_handler="scan_bundle")
@@ -692,6 +760,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if handler == "health":
         return cmd_health(ns)
+
+    if handler == "verify":
+        return cmd_verify(ns)
+
+    if handler == "generate_secret":
+        return cmd_generate_secret(ns)
 
     if handler == "scan_bundle":
         args = ScanArgs(receipt_dir=receipt_dir, quiet=quiet)
