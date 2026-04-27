@@ -151,14 +151,14 @@ def cmd_doctor_env(args: DoctorEnvArgs) -> int:
             )
             return EXIT_USER_FIXABLE
 
-        required_keys = load_required_keys(args.required_file)
-        env_map = parse_env_file(args.env_file)
+        required_keys = load_required_keys(None, args.required_file)
+        env_map, parse_issues = parse_env_file(args.env_file)
 
         report = validate_env(env_map, required_keys)
         if not args.quiet:
-            print(format_report(report))
+            print(format_report(args.env_file, parse_issues, report))
 
-        ok = bool(getattr(report, "ok", False))
+        ok = not report
         status = "ok" if ok else "invalid"
         exit_code = EXIT_OK if ok else EXIT_USER_FIXABLE
 

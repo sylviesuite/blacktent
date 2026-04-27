@@ -40,6 +40,18 @@ def _detect_redactions(text: str) -> List[RedactionRecord]:
             re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
         ),
         (
+            "api_key",
+            re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+        ),
+        (
+            "github_token",
+            re.compile(r"\bgh[psoua]_[A-Za-z0-9]{36,}\b"),
+        ),
+        (
+            "password",
+            re.compile(r"(?i)\b[\w_-]*(?:password|passwd|pwd|secret|key)[\w_-]*\s*=\s*\S+"),
+        ),
+        (
             "long_alnum_token",
             re.compile(r"\b[0-9A-Za-z]{20,}\b"),
         ),
@@ -50,14 +62,24 @@ def _detect_redactions(text: str) -> List[RedactionRecord]:
     for kind, pattern in patterns:
         for m in pattern.finditer(text):
             original = m.group(0)
+            start = m.start()
+            end = m.end()
+
+            # For env-var credential patterns, keep the key name visible —
+            # only redact the value (everything after the =).
+            if kind == "password" and "=" in original:
+                eq_offset = original.index("=") + 1
+                start = m.start() + eq_offset
+                original = original[eq_offset:]
+
             replacement = f"[REDACTED_{kind.upper()}]"
             redactions.append(
                 RedactionRecord(
                     kind=kind,
                     original=original,
                     replacement=replacement,
-                    start=m.start(),
-                    end=m.end(),
+                    start=start,
+                    end=end,
                 )
             )
 
@@ -73,6 +95,8 @@ def _apply_redactions(text: str, redactions: List[RedactionRecord]) -> str:
     cursor = 0
 
     for r in redactions:
+        if r.start < cursor:
+            continue  # consumed by a higher-priority redaction — skip
         if r.start > cursor:
             out_parts.append(text[cursor : r.start])
         out_parts.append(r.replacement)
